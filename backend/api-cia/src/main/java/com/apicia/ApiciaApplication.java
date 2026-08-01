@@ -8,5 +8,4 @@ public class ApiciaApplication {
 	public static void main(String[] args) {
 		SpringApplication.run(ApiciaApplication.class, args);
 	}
-
 }

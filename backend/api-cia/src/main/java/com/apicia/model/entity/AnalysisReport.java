@@ -41,11 +41,6 @@ public class AnalysisReport {
     @Column(name = "d_struct")
     private Double dStruct;
 
-    @Column(name = "d_api")
-    private Double dApi;
-
-    @Column(name = "a_sec")
-    private Double aSec;
 
     @Column(name = "s_total")
     private Double sTotal;

@@ -5,13 +5,10 @@ import com.apicia.exception.ResourceNotFoundException;
 import com.apicia.model.dto.*;
 import com.apicia.model.entity.*;
 import com.apicia.repository.AnalysisReportRepository;
-import com.apicia.repository.SecurityAlertRepository;
 import com.apicia.repository.SpecVersionRepository;
 import com.apicia.repository.ViolationRepository;
-import com.apicia.service.sam.SAMService;
 import com.apicia.service.scoring.ImpactScoringService;
 import com.apicia.service.sgm.SGMService;
-import com.apicia.service.spm.SPMService;
 import io.swagger.parser.OpenAPIParser;
 import io.swagger.v3.parser.core.models.SwaggerParseResult;
 import io.swagger.v3.oas.models.OpenAPI;
@@ -30,37 +27,22 @@ public class AnalysisService {
     private final SpecVersionRepository specVersionRepository;
     private final AnalysisReportRepository analysisReportRepository;
     private final ViolationRepository violationRepository;
-    private final SecurityAlertRepository securityAlertRepository;
     private final SGMService sgmService;
-    private final SPMService spmService;
-    private final SAMService samService;
     private final ImpactScoringService impactScoringService;
 
     @Value("${cia.weights.w1}")
     private double w1;
 
-    @Value("${cia.weights.w2}")
-    private double w2;
-
-    @Value("${cia.weights.w3}")
-    private double w3;
-
     public AnalysisService(
             SpecVersionRepository specVersionRepository,
             AnalysisReportRepository analysisReportRepository,
             ViolationRepository violationRepository,
-            SecurityAlertRepository securityAlertRepository,
             SGMService sgmService,
-            SPMService spmService,
-            SAMService samService,
             ImpactScoringService impactScoringService) {
         this.specVersionRepository = specVersionRepository;
         this.analysisReportRepository = analysisReportRepository;
         this.violationRepository = violationRepository;
-        this.securityAlertRepository = securityAlertRepository;
         this.sgmService = sgmService;
-        this.spmService = spmService;
-        this.samService = samService;
         this.impactScoringService = impactScoringService;
     }
 
@@ -86,17 +68,12 @@ public class AnalysisService {
         }
 
         SGMResultDTO sgmResult = sgmService.analyze(oldAPI, newAPI);
-        SPMResultDTO spmResult = spmService.analyze(oldAPI, newAPI);
-        SAMResultDTO samResult = samService.analyze(oldAPI, newAPI);
-        ImpactScoreDTO scoreResult = impactScoringService.calculate(sgmResult.getDStruct(), spmResult.getDApi(),
-                samResult.getASec());
+        ImpactScoreDTO scoreResult = impactScoringService.calculate(sgmResult.getDStruct());
 
         AnalysisReport report = AnalysisReport.builder()
                 .oldSpec(oldSpec)
                 .newSpec(newSpec)
                 .dStruct(sgmResult.getDStruct())
-                .dApi(spmResult.getDApi())
-                .aSec(samResult.getASec())
                 .sTotal(scoreResult.getSTotal())
                 .riskLevel(RiskLevel.valueOf(scoreResult.getRiskLevel()))
                 .build();
@@ -118,26 +95,11 @@ public class AnalysisService {
             }
         }
 
-        if (samResult.getAlerts() != null) {
-            for (SecurityAlertDTO dto : samResult.getAlerts()) {
-                SecurityAlert alert = SecurityAlert.builder()
-                        .report(report)
-                        .checkId(dto.getCheckId())
-                        .severity(AlertSeverity.valueOf(dto.getSeverity()))
-                        .endpoint(dto.getEndpoint())
-                        .description(dto.getDescription())
-                        .build();
-                securityAlertRepository.save(alert);
-            }
-        }
-
         return AnalysisResponseDTO.builder()
                 .reportId(report.getId())
                 .oldVersion(oldSpec.getVersionLabel())
                 .newVersion(newSpec.getVersionLabel())
                 .sgm(sgmResult)
-                .spm(spmResult)
-                .sam(samResult)
                 .impactScore(scoreResult)
                 .build();
     }
@@ -163,7 +125,6 @@ public class AnalysisService {
                 .orElseThrow(() -> new ResourceNotFoundException("Report not found with id: " + id));
 
         List<Violation> violations = violationRepository.findByReportId(id);
-        List<SecurityAlert> alerts = securityAlertRepository.findByReportId(id);
 
         List<ViolationDTO> violationDTOs = new ArrayList<>();
         int breakingCount = 0;
@@ -205,69 +166,8 @@ public class AnalysisService {
                 .violations(violationDTOs)
                 .build();
 
-        List<SecurityAlertDTO> alertDTOs = new ArrayList<>();
-        int criticalAlerts = 0;
-        int highAlerts = 0;
-        for (SecurityAlert a : alerts) {
-            SecurityAlertDTO dto = SecurityAlertDTO.builder()
-                    .checkId(a.getCheckId())
-                    .severity(a.getSeverity() != null ? a.getSeverity().name() : null)
-                    .endpoint(a.getEndpoint())
-                    .description(a.getDescription())
-                    .build();
-            alertDTOs.add(dto);
-
-            if (a.getSeverity() != null) {
-                switch (a.getSeverity()) {
-                    case CRITICAL:
-                        criticalAlerts++;
-                        break;
-                    case HIGH:
-                        highAlerts++;
-                        break;
-                    default:
-                        break;
-                }
-            }
-        }
-
-        SAMResultDTO sam = SAMResultDTO.builder()
-                .totalAlerts(alertDTOs.size())
-                .criticalCount(criticalAlerts)
-                .highCount(highAlerts)
-                .aSec(report.getASec())
-                .alerts(alertDTOs)
-                .build();
-
-        SPMResultDTO spm;
-        try {
-            SwaggerParseResult r1 = new OpenAPIParser().readContents(report.getOldSpec().getRawContent(), null, null);
-            SwaggerParseResult r2 = new OpenAPIParser().readContents(report.getNewSpec().getRawContent(), null, null);
-            if (r1.getOpenAPI() != null && r2.getOpenAPI() != null) {
-                spm = spmService.analyze(r1.getOpenAPI(), r2.getOpenAPI());
-            } else {
-                spm = SPMResultDTO.builder()
-                        .addedEndpoints(new ArrayList<>())
-                        .removedEndpoints(new ArrayList<>())
-                        .changedEndpoints(new ArrayList<>())
-                        .flowChanged(false)
-                        .dApi(report.getDApi())
-                        .build();
-            }
-        } catch (Exception e) {
-            spm = SPMResultDTO.builder()
-                    .addedEndpoints(new ArrayList<>())
-                    .removedEndpoints(new ArrayList<>())
-                    .changedEndpoints(new ArrayList<>())
-                    .flowChanged(false)
-                    .dApi(report.getDApi())
-                    .build();
-        }
-
         Map<String, Double> breakdown = new LinkedHashMap<>();
         breakdown.put("w1_dStruct", w1 * report.getDStruct());
-        breakdown.put("w2_dApi", w2 * report.getDApi());
-        breakdown.put("w3_aSec", w3 * report.getASec());
 
         ImpactScoreDTO impactScore = ImpactScoreDTO.builder()
                 .sTotal(report.getSTotal())
@@ -280,9 +180,8 @@ public class AnalysisService {
                 .oldVersion(report.getOldSpec() != null ? report.getOldSpec().getVersionLabel() : null)
                 .newVersion(report.getNewSpec() != null ? report.getNewSpec().getVersionLabel() : null)
                 .sgm(sgm)
-                .spm(spm)
-                .sam(sam)
                 .impactScore(impactScore)
                 .build();
     }
 }
+
