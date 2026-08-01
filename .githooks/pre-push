@@ -1,0 +1,23 @@
+#!/bin/sh
+
+echo "========================================"
+echo "API-CIA Git Hook"
+echo "Collecting repository information..."
+echo "========================================"
+
+REPOSITORY=$(git config --get remote.origin.url)
+BRANCH=$(git branch --show-current)
+CURRENT_COMMIT=$(git rev-parse HEAD)
+PREVIOUS_COMMIT=$(git rev-parse HEAD~1)
+
+curl -X POST http://localhost:8080/api/v1/analysis/git \
+-H "Content-Type: application/json" \
+-d "{
+    \"repository\":\"$REPOSITORY\",
+    \"branch\":\"$BRANCH\",
+    \"before\":\"$PREVIOUS_COMMIT\",
+    \"after\":\"$CURRENT_COMMIT\"
+}"
+
+echo ""
+echo "API-CIA analysis request sent."
