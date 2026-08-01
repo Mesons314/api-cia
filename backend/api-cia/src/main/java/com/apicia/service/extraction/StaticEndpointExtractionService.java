@@ -50,10 +50,15 @@ public class StaticEndpointExtractionService {
     );
 
     private final EndpointExtractionProperties properties;
+    private final SecurityExtractionService securityExtractionService;
     private final Map<String, ClassSchema> indexedClasses = new HashMap<>();
 
-    public StaticEndpointExtractionService(EndpointExtractionProperties properties) {
+    public StaticEndpointExtractionService(
+            EndpointExtractionProperties properties,
+            SecurityExtractionService securityExtractionService
+    ) {
         this.properties = properties;
+        this.securityExtractionService = securityExtractionService;
         StaticJavaParser.getParserConfiguration().setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21);
     }
 
@@ -115,6 +120,8 @@ public class StaticEndpointExtractionService {
             }
         }
 
+        securityExtractionService.extractSecurity(endpoints, units);
+ 
         endpoints.sort(Comparator.comparing(ExtractedEndpoint::getPath)
                 .thenComparing(ExtractedEndpoint::getHttpMethod)
                 .thenComparing(ExtractedEndpoint::getControllerClass)
@@ -133,7 +140,15 @@ public class StaticEndpointExtractionService {
         ));
         spec.put("servers", properties.getServers().stream().map(url -> Map.of("url", url)).toList());
         spec.put("paths", paths(endpoints));
-        spec.put("components", Map.of("schemas", components(endpoints)));
+        
+        Map<String, Object> componentsMap = new LinkedHashMap<>();
+        componentsMap.put("schemas", components(endpoints));
+        Map<String, Object> schemes = securityExtractionService.getSecuritySchemes(endpoints);
+        if (!schemes.isEmpty()) {
+            componentsMap.put("securitySchemes", schemes);
+        }
+        spec.put("components", componentsMap);
+        
         spec.put("x-extraction", Map.of(
                 "mode", "static-source",
                 "sourceRoot", sourceRoot().toString(),
@@ -270,6 +285,32 @@ public class StaticEndpointExtractionService {
             operation.put("requestBody", requestBody(endpoint));
         }
         operation.put("responses", responses(endpoint));
+
+        // Security info
+        Map<String, Object> xSecurity = new LinkedHashMap<>();
+        if ("true".equals(endpoint.getAuthenticationRequired())) {
+            xSecurity.put("authenticationRequired", true);
+            if (endpoint.getAuthenticationType() != null && !"UNKNOWN".equals(endpoint.getAuthenticationType())) {
+                xSecurity.put("authenticationType", endpoint.getAuthenticationType());
+            }
+            if (endpoint.getAuthorization() != null) {
+                xSecurity.put("authorization", endpoint.getAuthorization());
+            }
+            
+            String schemeName = "bearerAuth";
+            if ("Basic".equals(endpoint.getAuthenticationType())) {
+                schemeName = "basicAuth";
+            } else if ("OAuth2".equals(endpoint.getAuthenticationType())) {
+                schemeName = "oauth2Auth";
+            }
+            operation.put("security", List.of(Map.of(schemeName, List.of())));
+        } else if ("false".equals(endpoint.getAuthenticationRequired())) {
+            xSecurity.put("authenticationRequired", false);
+        } else {
+            xSecurity.put("authenticationRequired", "UNKNOWN");
+        }
+        operation.put("x-security", xSecurity);
+
         return operation;
     }
 
@@ -707,15 +748,6 @@ public class StaticEndpointExtractionService {
         }
     }
 
-    private static class SourceUnit {
-        private final Path path;
-        private final CompilationUnit compilationUnit;
-
-        private SourceUnit(Path path, CompilationUnit compilationUnit) {
-            this.path = path;
-            this.compilationUnit = compilationUnit;
-        }
-    }
 
     private static class ClassSchema {
         private final String simpleName;

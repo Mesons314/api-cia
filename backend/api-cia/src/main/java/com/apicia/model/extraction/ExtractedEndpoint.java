@@ -99,4 +99,32 @@ public class ExtractedEndpoint {
     public List<ExtractedResponse> getResponses() {
         return responses;
     }
+
+    private String authenticationRequired = "UNKNOWN";
+    private String authenticationType = "UNKNOWN";
+    private String authorization;
+
+    public String getAuthenticationRequired() {
+        return authenticationRequired;
+    }
+
+    public void setAuthenticationRequired(String authenticationRequired) {
+        this.authenticationRequired = authenticationRequired;
+    }
+
+    public String getAuthenticationType() {
+        return authenticationType;
+    }
+
+    public void setAuthenticationType(String authenticationType) {
+        this.authenticationType = authenticationType;
+    }
+
+    public String getAuthorization() {
+        return authorization;
+    }
+
+    public void setAuthorization(String authorization) {
+        this.authorization = authorization;
+    }
 }
