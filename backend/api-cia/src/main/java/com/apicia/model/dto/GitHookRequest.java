@@ -16,4 +16,7 @@ public class GitHookRequest {
     private String before;
 
     private String after;
+
+    // Local repository path
+    private String localPath;
 }

@@ -8,7 +8,17 @@ echo "========================================"
 REPOSITORY=$(git config --get remote.origin.url)
 BRANCH=$(git branch --show-current)
 CURRENT_COMMIT=$(git rev-parse HEAD)
-PREVIOUS_COMMIT=$(git rev-parse HEAD~1)
+
+# Handle first commit safely
+if git rev-parse HEAD~1 >/dev/null 2>&1
+then
+    PREVIOUS_COMMIT=$(git rev-parse HEAD~1)
+else
+    PREVIOUS_COMMIT=""
+fi
+
+# Local repository path
+LOCAL_PATH=$(pwd)
 
 curl -X POST http://localhost:8080/api/v1/analysis/git \
 -H "Content-Type: application/json" \
@@ -16,7 +26,8 @@ curl -X POST http://localhost:8080/api/v1/analysis/git \
     \"repository\":\"$REPOSITORY\",
     \"branch\":\"$BRANCH\",
     \"before\":\"$PREVIOUS_COMMIT\",
-    \"after\":\"$CURRENT_COMMIT\"
+    \"after\":\"$CURRENT_COMMIT\",
+    \"localPath\":\"$LOCAL_PATH\"
 }"
 
 echo ""
