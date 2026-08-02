@@ -76,15 +76,18 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorResponse> handleGenericException(Exception ex) {
-        // Log the message cleanly without dumping a massive stack trace on the console
-        System.err.println("Unexpected error: " + ex.getMessage());
-        ErrorResponse error = ErrorResponse.builder()
-                .status(HttpStatus.INTERNAL_SERVER_ERROR.value())
-                .error("Internal Server Error")
-                .message("Unexpected error occurred")
-                .timestamp(LocalDateTime.now())
-                .build();
-        return new ResponseEntity<>(error, HttpStatus.INTERNAL_SERVER_ERROR);
-    }
+public ResponseEntity<ErrorResponse> handleGenericException(Exception ex) {
+
+    // Print the complete exception stack trace
+    ex.printStackTrace();
+
+    ErrorResponse error = ErrorResponse.builder()
+            .status(HttpStatus.INTERNAL_SERVER_ERROR.value())
+            .error("Internal Server Error")
+            .message(ex.getMessage())   // Return actual error message
+            .timestamp(LocalDateTime.now())
+            .build();
+
+    return new ResponseEntity<>(error, HttpStatus.INTERNAL_SERVER_ERROR);
+}
 }

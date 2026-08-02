@@ -1,5 +1,6 @@
 package com.apicia.service;
 
+import com.apicia.git.CommitComparator;
 import com.apicia.git.RepositoryCloner;
 import com.apicia.model.dto.GitHookRequest;
 import org.slf4j.Logger;
@@ -14,9 +15,14 @@ public class GitHookService {
     private static final Logger logger = LoggerFactory.getLogger(GitHookService.class);
 
     private final RepositoryCloner repositoryCloner;
+    private final CommitComparator commitComparator;
 
-    public GitHookService(RepositoryCloner repositoryCloner) {
+    public GitHookService(
+            RepositoryCloner repositoryCloner,
+            CommitComparator commitComparator) {
+
         this.repositoryCloner = repositoryCloner;
+        this.commitComparator = commitComparator;
     }
 
     public String processGitHook(GitHookRequest request) {
@@ -30,15 +36,21 @@ public class GitHookService {
 
         try {
 
+            // Clone the repository
             Path clonedRepository = repositoryCloner.cloneRepository(request.getRepository());
 
             logger.info("Repository cloned successfully.");
             logger.info("Cloned Repository Path : {}", clonedRepository);
 
+            // Compare commits (currently logs commit SHAs)
+            commitComparator.compareCommits(
+                    request.getBefore(),
+                    request.getAfter()
+            );
+
         } catch (Exception e) {
 
             logger.error("Repository cloning failed.", e);
-
             return "Repository Clone Failed";
         }
 
