@@ -43,10 +43,12 @@ public class GitHookService {
             logger.info("Cloned Repository Path : {}", clonedRepository);
 
             // Compare commits (currently logs commit SHAs)
+            logger.info("Calling CommitComparator...");
             commitComparator.compareCommits(
                     request.getBefore(),
                     request.getAfter()
             );
+            logger.info("CommitComparator finished.");
 
         } catch (Exception e) {
 
