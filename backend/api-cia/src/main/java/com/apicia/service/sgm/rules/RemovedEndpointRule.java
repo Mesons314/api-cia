@@ -8,8 +8,10 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Component;
+import org.springframework.core.annotation.Order;
 
 @Component
+@Order(2)
 public class RemovedEndpointRule implements DesignRule {
 
     @Override

@@ -2,9 +2,7 @@ package com.apicia.service.extraction;
 
 import com.apicia.config.EndpointExtractionProperties;
 import com.apicia.exception.InvalidSpecException;
-import com.apicia.model.dto.AnalysisRequestDTO;
-import com.apicia.model.dto.AnalysisResponseDTO;
-import com.apicia.model.dto.ExtractionSnapshotDTO;
+import com.apicia.model.dto.*;
 import com.apicia.model.entity.SpecVersion;
 import com.apicia.repository.SpecVersionRepository;
 import com.apicia.service.AnalysisService;
@@ -17,6 +15,9 @@ import io.swagger.v3.oas.models.PathItem;
 import io.swagger.v3.parser.core.models.SwaggerParseResult;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -60,34 +61,64 @@ public class EndpointExtractionWorkflowService {
 
     @Transactional
     public ExtractionSnapshotDTO extractSaveAndAnalyze(boolean analyze) {
+        migrateNullProjectsAndVersions();
         String rawContent = generateOpenApiJson();
         OpenAPI openAPI = parse(rawContent);
         int totalEndpoints = countEndpoints(openAPI);
 
-        SpecVersion previous = specVersionRepository.findFirstByFileNameOrderByUploadedAtDesc(SNAPSHOT_FILE_NAME).orElse(null);
-        if (previous != null && rawContent.equals(previous.getRawContent())) {
+        String projectId = properties.getProjectId();
+        String version = properties.getVersion();
+
+        List<SpecVersion> projectSpecs = specVersionRepository.findByProjectId(projectId);
+        SpecVersion latestSnapshot = projectSpecs.stream()
+                .filter(s -> version.equals(s.getVersion()))
+                .max((s1, s2) -> {
+                    if (s1.getUploadedAt() != null && s2.getUploadedAt() != null) {
+                        return s1.getUploadedAt().compareTo(s2.getUploadedAt());
+                    }
+                    return s1.getId().compareTo(s2.getId());
+                })
+                .orElse(null);
+
+        if (latestSnapshot != null && rawContent.equals(latestSnapshot.getRawContent())) {
+            SpecVersion baseSpec = findBaseSpec(latestSnapshot, projectSpecs);
+            Long reportId = null;
+            if (analyze && baseSpec != null) {
+                printDebugContracts(baseSpec, latestSnapshot);
+                AnalysisResponseDTO response = analysisService.compare(AnalysisRequestDTO.builder()
+                        .oldSpecId(baseSpec.getId())
+                        .newSpecId(latestSnapshot.getId())
+                        .build());
+                reportId = response.getReportId();
+            }
             return ExtractionSnapshotDTO.builder()
-                    .specId(previous.getId())
-                    .versionLabel(previous.getVersionLabel())
-                    .totalEndpoints(previous.getTotalEndpoints())
+                    .specId(latestSnapshot.getId())
+                    .versionLabel(latestSnapshot.getVersionLabel())
+                    .totalEndpoints(latestSnapshot.getTotalEndpoints())
                     .saved(false)
-                    .analyzed(false)
-                    .extractedAt(previous.getUploadedAt())
+                    .analyzed(analyze && baseSpec != null)
+                    .analysisReportId(reportId)
+                    .extractedAt(latestSnapshot.getUploadedAt())
                     .build();
         }
 
         SpecVersion saved = specVersionRepository.save(SpecVersion.builder()
-                .versionLabel(versionLabel())
+                .versionLabel(versionLabel(projectId, version))
+                .projectId(projectId)
+                .version(version)
                 .fileName(SNAPSHOT_FILE_NAME)
                 .rawContent(rawContent)
                 .totalEndpoints(totalEndpoints)
                 .build());
+        projectSpecs.add(saved);
 
         boolean analyzed = false;
         Long reportId = null;
-        if (analyze && previous != null) {
+        SpecVersion baseSpec = findBaseSpec(saved, projectSpecs);
+        if (analyze && baseSpec != null) {
+            printDebugContracts(baseSpec, saved);
             AnalysisResponseDTO response = analysisService.compare(AnalysisRequestDTO.builder()
-                    .oldSpecId(previous.getId())
+                    .oldSpecId(baseSpec.getId())
                     .newSpecId(saved.getId())
                     .build());
             analyzed = true;
@@ -105,6 +136,234 @@ public class EndpointExtractionWorkflowService {
                 .build();
     }
 
+    @Transactional
+    public AnalysisResponseDTO generateAndAnalyze() {
+        migrateNullProjectsAndVersions();
+        String rawContent = generateOpenApiJson();
+        OpenAPI openAPI = parse(rawContent);
+        int totalEndpoints = countEndpoints(openAPI);
+
+        String projectId = properties.getProjectId();
+        String version = properties.getVersion();
+
+        List<SpecVersion> projectSpecs = specVersionRepository.findByProjectId(projectId);
+        SpecVersion latestSnapshot = projectSpecs.stream()
+                .filter(s -> version.equals(s.getVersion()))
+                .max((s1, s2) -> {
+                    if (s1.getUploadedAt() != null && s2.getUploadedAt() != null) {
+                        return s1.getUploadedAt().compareTo(s2.getUploadedAt());
+                    }
+                    return s1.getId().compareTo(s2.getId());
+                })
+                .orElse(null);
+
+        SpecVersion currentSpec;
+        if (latestSnapshot != null && rawContent.equals(latestSnapshot.getRawContent())) {
+            currentSpec = latestSnapshot;
+        } else {
+            currentSpec = SpecVersion.builder()
+                    .versionLabel(versionLabel(projectId, version))
+                    .projectId(projectId)
+                    .version(version)
+                    .fileName(SNAPSHOT_FILE_NAME)
+                    .rawContent(rawContent)
+                    .totalEndpoints(totalEndpoints)
+                    .build();
+            currentSpec = specVersionRepository.save(currentSpec);
+            projectSpecs.add(currentSpec);
+        }
+
+        SpecVersion baseSpec = findBaseSpec(currentSpec, projectSpecs);
+
+        if (baseSpec != null) {
+            printDebugContracts(baseSpec, currentSpec);
+            return analysisService.compare(AnalysisRequestDTO.builder()
+                    .oldSpecId(baseSpec.getId())
+                    .newSpecId(currentSpec.getId())
+                    .build());
+        } else {
+            return AnalysisResponseDTO.builder()
+                    .reportId(null)
+                    .oldVersion(null)
+                    .newVersion(currentSpec.getVersionLabel())
+                    .sgm(SGMResultDTO.builder()
+                            .totalViolations(0)
+                            .breakingCount(0)
+                            .warningCount(0)
+                            .infoCount(0)
+                            .violations(new ArrayList<>())
+                            .build())
+                    .impactScore(ImpactScoreDTO.builder()
+                            .sTotal(0.0)
+                            .riskLevel("LOW")
+                            .breakdown(new HashMap<>())
+                            .build())
+                    .build();
+        }
+    }
+
+    private void printDebugContracts(SpecVersion baseSpec, SpecVersion currentSpec) {
+        System.out.println("===== Base API Contract =====");
+        System.out.println("Snapshot/Version ID: " + (baseSpec != null ? baseSpec.getId() : "null"));
+        System.out.println("Project ID: " + (baseSpec != null ? baseSpec.getProjectId() : "null"));
+        System.out.println("Timestamp: " + (baseSpec != null ? baseSpec.getUploadedAt() : "null"));
+        System.out.println("Content:\n" + (baseSpec != null ? baseSpec.getRawContent() : ""));
+        System.out.println();
+        System.out.println("===== Current API Contract =====");
+        System.out.println("Content:\n" + (currentSpec != null ? currentSpec.getRawContent() : ""));
+        System.out.println("=================================");
+    }
+
+    public SpecVersion findBaseSpec(SpecVersion currentSpec, List<SpecVersion> projectSpecs) {
+        if (projectSpecs == null || projectSpecs.isEmpty()) {
+            return null;
+        }
+
+        List<SpecVersion> candidates = projectSpecs.stream()
+                .filter(s -> s.getId() != null && !s.getId().equals(currentSpec.getId()))
+                .toList();
+
+        if (candidates.isEmpty()) {
+            return null;
+        }
+
+        List<SpecVersion> sameVersionOlder = candidates.stream()
+                .filter(s -> currentSpec.getVersion().equals(s.getVersion()))
+                .filter(s -> s.getUploadedAt() != null && currentSpec.getUploadedAt() != null &&
+                             (s.getUploadedAt().isBefore(currentSpec.getUploadedAt()) || 
+                              (s.getUploadedAt().equals(currentSpec.getUploadedAt()) && s.getId() < currentSpec.getId())))
+                .toList();
+
+        if (!sameVersionOlder.isEmpty()) {
+            return sameVersionOlder.stream()
+                    .max((s1, s2) -> {
+                        if (s1.getUploadedAt() != null && s2.getUploadedAt() != null) {
+                            int c = s1.getUploadedAt().compareTo(s2.getUploadedAt());
+                            if (c != 0) return c;
+                        }
+                        return s1.getId().compareTo(s2.getId());
+                    })
+                    .orElse(null);
+        }
+
+        List<SpecVersion> predecessors = candidates.stream()
+                .filter(s -> com.apicia.util.VersionComparator.compareVersions(s.getVersion(), currentSpec.getVersion()) < 0)
+                .toList();
+
+        if (!predecessors.isEmpty()) {
+            String highestVersion = predecessors.stream()
+                    .map(SpecVersion::getVersion)
+                    .max(com.apicia.util.VersionComparator::compareVersions)
+                    .orElse(null);
+
+            return predecessors.stream()
+                    .filter(s -> s.getVersion().equals(highestVersion))
+                    .max((s1, s2) -> {
+                        if (s1.getUploadedAt() != null && s2.getUploadedAt() != null) {
+                            int c = s1.getUploadedAt().compareTo(s2.getUploadedAt());
+                            if (c != 0) return c;
+                        }
+                        return s1.getId().compareTo(s2.getId());
+                    })
+                    .orElse(null);
+        }
+
+        return candidates.stream()
+                .filter(s -> s.getUploadedAt() != null && currentSpec.getUploadedAt() != null &&
+                             (s.getUploadedAt().isBefore(currentSpec.getUploadedAt()) || 
+                              (s.getUploadedAt().equals(currentSpec.getUploadedAt()) && s.getId() < currentSpec.getId())))
+                .max((s1, s2) -> {
+                    if (s1.getUploadedAt() != null && s2.getUploadedAt() != null) {
+                        int c = s1.getUploadedAt().compareTo(s2.getUploadedAt());
+                        if (c != 0) return c;
+                    }
+                    return s1.getId().compareTo(s2.getId());
+                })
+                .orElse(null);
+    }
+
+    private void migrateNullProjectsAndVersions() {
+        List<SpecVersion> allSpecs = specVersionRepository.findAll();
+        boolean changed = false;
+        for (SpecVersion spec : allSpecs) {
+            boolean rowChanged = false;
+            if (spec.getProjectId() == null) {
+                spec.setProjectId(resolveProjectId(spec));
+                rowChanged = true;
+            }
+            if (spec.getVersion() == null) {
+                spec.setVersion(resolveVersion(spec));
+                rowChanged = true;
+            }
+            if (rowChanged) {
+                specVersionRepository.save(spec);
+                changed = true;
+            }
+        }
+        if (changed) {
+            System.out.println("Migrated historical SpecVersion records to include projectId and version.");
+        }
+    }
+
+    private String resolveProjectId(SpecVersion spec) {
+        try {
+            SwaggerParseResult parseResult = new OpenAPIParser().readContents(spec.getRawContent(), null, null);
+            OpenAPI openAPI = parseResult.getOpenAPI();
+            if (openAPI != null) {
+                if (openAPI.getExtensions() != null && openAPI.getExtensions().containsKey("x-project-id")) {
+                    return String.valueOf(openAPI.getExtensions().get("x-project-id"));
+                } else if (openAPI.getInfo() != null) {
+                    if (openAPI.getInfo().getExtensions() != null && openAPI.getInfo().getExtensions().containsKey("x-project-id")) {
+                        return String.valueOf(openAPI.getInfo().getExtensions().get("x-project-id"));
+                    } else if (openAPI.getInfo().getTitle() != null) {
+                        return openAPI.getInfo().getTitle();
+                    }
+                }
+            }
+        } catch (Exception e) {
+            // ignore
+        }
+
+        String label = spec.getVersionLabel();
+        if (label != null && label.contains("-")) {
+            String[] parts = label.split("-");
+            if (parts.length >= 3) {
+                return parts[0];
+            }
+        }
+        return "default-project";
+    }
+
+    private String resolveVersion(SpecVersion spec) {
+        try {
+            SwaggerParseResult parseResult = new OpenAPIParser().readContents(spec.getRawContent(), null, null);
+            OpenAPI openAPI = parseResult.getOpenAPI();
+            if (openAPI != null && openAPI.getInfo() != null && openAPI.getInfo().getVersion() != null) {
+                return openAPI.getInfo().getVersion();
+            }
+        } catch (Exception e) {
+            // ignore
+        }
+
+        String label = spec.getVersionLabel();
+        if (label != null && label.contains("-")) {
+            String[] parts = label.split("-");
+            if (parts.length >= 3) {
+                StringBuilder sb = new StringBuilder();
+                for (int i = 1; i < parts.length - 2; i++) {
+                    if (sb.length() > 0) sb.append("-");
+                    sb.append(parts[i]);
+                }
+                String ver = sb.toString();
+                if (!ver.isEmpty()) {
+                    return ver;
+                }
+                return parts[1];
+            }
+        }
+        return "local";
+    }
+
     private OpenAPI parse(String rawContent) {
         SwaggerParseResult parseResult = new OpenAPIParser().readContents(rawContent, null, null);
         OpenAPI openAPI = parseResult.getOpenAPI();
@@ -114,9 +373,9 @@ public class EndpointExtractionWorkflowService {
         return openAPI;
     }
 
-    private String versionLabel() {
+    private String versionLabel(String projectId, String version) {
         String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
-        return properties.getProjectId() + "-" + properties.getVersion() + "-" + timestamp;
+        return projectId + "-" + version + "-" + timestamp;
     }
 
     private int countEndpoints(OpenAPI spec) {
@@ -135,3 +394,4 @@ public class EndpointExtractionWorkflowService {
         return count;
     }
 }
+

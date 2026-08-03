@@ -90,6 +90,11 @@ public class AnalysisService {
                         .message(dto.getMessage())
                         .oldValue(dto.getOldValue())
                         .newValue(dto.getNewValue())
+                        .changeType(dto.getChangeType())
+                        .oldPath(dto.getOldPath())
+                        .newPath(dto.getNewPath())
+                        .controller(dto.getController())
+                        .method(dto.getMethod())
                         .build();
                 violationRepository.save(violation);
             }
@@ -138,6 +143,11 @@ public class AnalysisService {
                     .message(v.getMessage())
                     .oldValue(v.getOldValue())
                     .newValue(v.getNewValue())
+                    .changeType(v.getChangeType())
+                    .oldPath(v.getOldPath())
+                    .newPath(v.getNewPath())
+                    .controller(v.getController())
+                    .method(v.getMethod())
                     .build();
             violationDTOs.add(dto);
 

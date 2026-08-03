@@ -50,4 +50,19 @@ public class Violation {
 
     @Column(name = "new_value", length = 500)
     private String newValue;
+
+    @Column(name = "change_type", length = 50)
+    private String changeType;
+
+    @Column(name = "old_path", length = 255)
+    private String oldPath;
+
+    @Column(name = "new_path", length = 255)
+    private String newPath;
+
+    @Column(name = "controller", length = 100)
+    private String controller;
+
+    @Column(name = "method", length = 100)
+    private String method;
 }

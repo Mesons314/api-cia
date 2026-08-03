@@ -7,7 +7,7 @@ import java.util.Collections;
 import java.util.List;
 import org.springframework.stereotype.Component;
 
-@Component
+// @Component
 public class VersioningRule implements DesignRule {
 
     @Override

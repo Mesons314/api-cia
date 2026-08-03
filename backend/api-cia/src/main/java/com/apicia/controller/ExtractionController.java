@@ -1,5 +1,6 @@
 package com.apicia.controller;
 
+import com.apicia.model.dto.AnalysisResponseDTO;
 import com.apicia.model.dto.ExtractionSnapshotDTO;
 import com.apicia.model.extraction.ExtractedEndpoint;
 import com.apicia.service.extraction.EndpointExtractionWorkflowService;
@@ -36,7 +37,12 @@ public class ExtractionController {
     }
 
     @GetMapping(value = "/openapi.json", produces = MediaType.APPLICATION_JSON_VALUE)
-    public Map<String, Object> openApiJson() {
+    public AnalysisResponseDTO openApiJson() {
+        return workflowService.generateAndAnalyze();
+    }
+
+    @GetMapping(value = "/openapi-raw.json", produces = MediaType.APPLICATION_JSON_VALUE)
+    public Map<String, Object> openApiRawJson() {
         return workflowService.generateOpenApi();
     }
 
@@ -45,3 +51,5 @@ public class ExtractionController {
         return workflowService.extractSaveAndAnalyze(analyze);
     }
 }
+
+

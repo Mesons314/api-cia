@@ -12,4 +12,6 @@ public interface SpecVersionRepository extends JpaRepository<SpecVersion, Long> 
     List<SpecVersion> findAllByOrderByUploadedAtDesc();
 
     Optional<SpecVersion> findFirstByFileNameOrderByUploadedAtDesc(String fileName);
+
+    List<SpecVersion> findByProjectId(String projectId);
 }

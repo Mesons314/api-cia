@@ -16,4 +16,10 @@ public class ViolationDTO {
     private String message;
     private String oldValue;
     private String newValue;
+
+    private String changeType;
+    private String oldPath;
+    private String newPath;
+    private String controller;
+    private String method;
 }
