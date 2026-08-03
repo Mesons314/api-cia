@@ -89,13 +89,16 @@ public class SGMService {
                     dto.setChangeType("ENDPOINT_REMOVED");
                     break;
                 case "SGM-004":
-                    dto.setChangeType("HTTP_METHOD_CHANGED");
-                    break;
-                case "SGM-005":
                     dto.setChangeType("PARAMETER_TYPE_MUTATED");
                     break;
-                case "SGM-006":
+                case "SGM-005":
                     dto.setChangeType("REQUIRED_FIELD_MODIFIED");
+                    break;
+                case "SGM-006":
+                    dto.setChangeType("HTTP_METHOD_CHANGED");
+                    break;
+                case "SGM-007":
+                    dto.setChangeType("SECURITY_VIOLATION");
                     break;
                 case "SGM-009":
                     dto.setChangeType("ENDPOINT_RENAMED");
