@@ -44,10 +44,32 @@ public class SpecController {
             throw new InvalidSpecException("Not valid OpenAPI file");
         }
 
+        String projectId = null;
+        String version = null;
+        if (openAPI.getExtensions() != null && openAPI.getExtensions().containsKey("x-project-id")) {
+            projectId = String.valueOf(openAPI.getExtensions().get("x-project-id"));
+        } else if (openAPI.getInfo() != null) {
+            if (openAPI.getInfo().getExtensions() != null && openAPI.getInfo().getExtensions().containsKey("x-project-id")) {
+                projectId = String.valueOf(openAPI.getInfo().getExtensions().get("x-project-id"));
+            } else {
+                projectId = openAPI.getInfo().getTitle();
+            }
+            version = openAPI.getInfo().getVersion();
+        }
+
+        if (projectId == null || projectId.trim().isEmpty()) {
+            projectId = "default-project";
+        }
+        if (version == null || version.trim().isEmpty()) {
+            version = versionLabel;
+        }
+
         int totalEndpoints = countEndpoints(openAPI);
 
         SpecVersion specVersion = SpecVersion.builder()
                 .versionLabel(versionLabel)
+                .projectId(projectId)
+                .version(version)
                 .fileName(file.getOriginalFilename())
                 .rawContent(content)
                 .totalEndpoints(totalEndpoints)

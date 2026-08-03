@@ -28,6 +28,12 @@ public class SpecVersion {
     @Column(name = "version_label", length = 50)
     private String versionLabel;
 
+    @Column(name = "project_id", length = 100)
+    private String projectId;
+
+    @Column(name = "version", length = 50)
+    private String version;
+
     @Column(name = "file_name", length = 255)
     private String fileName;
 

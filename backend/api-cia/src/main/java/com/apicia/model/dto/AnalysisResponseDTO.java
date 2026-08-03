@@ -14,7 +14,6 @@ public class AnalysisResponseDTO {
     private String oldVersion;
     private String newVersion;
     private SGMResultDTO sgm;
-    private SPMResultDTO spm;
-    private SAMResultDTO sam;
+
     private ImpactScoreDTO impactScore;
 }

@@ -12,14 +12,8 @@ public class ImpactScoringService {
     @Value("${cia.weights.w1}")
     private double w1;
 
-    @Value("${cia.weights.w2}")
-    private double w2;
-
-    @Value("${cia.weights.w3}")
-    private double w3;
-
-    public ImpactScoreDTO calculate(double dStruct, double dApi, double aSec) {
-        double sTotal = w1 * dStruct + w2 * dApi + w3 * aSec;
+    public ImpactScoreDTO calculate(double dStruct) {
+        double sTotal = w1 * dStruct;
 
         String riskLevel;
         if (sTotal < 0.25) {
@@ -34,8 +28,6 @@ public class ImpactScoringService {
 
         Map<String, Double> breakdown = new LinkedHashMap<>();
         breakdown.put("w1_dStruct", w1 * dStruct);
-        breakdown.put("w2_dApi", w2 * dApi);
-        breakdown.put("w3_aSec", w3 * aSec);
 
         return ImpactScoreDTO.builder()
                 .sTotal(sTotal)
@@ -44,3 +36,4 @@ public class ImpactScoringService {
                 .build();
     }
 }
+
