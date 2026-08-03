@@ -10,6 +10,7 @@ import com.apicia.repository.SpecVersionRepository;
 import com.apicia.service.AnalysisService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import io.swagger.parser.OpenAPIParser;
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.PathItem;
@@ -42,7 +43,7 @@ public class EndpointExtractionWorkflowService {
         this.extractionService = extractionService;
         this.specVersionRepository = specVersionRepository;
         this.analysisService = analysisService;
-        this.objectMapper = objectMapper;
+        this.objectMapper = objectMapper.copy().configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
     }
 
     public Map<String, Object> generateOpenApi() {
