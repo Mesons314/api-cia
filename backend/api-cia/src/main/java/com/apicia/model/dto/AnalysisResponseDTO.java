@@ -16,4 +16,5 @@ public class AnalysisResponseDTO {
     private SGMResultDTO sgm;
 
     private ImpactScoreDTO impactScore;
+    private BlastRadiusDTO blastRadius;
 }

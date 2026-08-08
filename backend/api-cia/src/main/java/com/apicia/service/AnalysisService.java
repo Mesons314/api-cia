@@ -5,17 +5,21 @@ import com.apicia.exception.ResourceNotFoundException;
 import com.apicia.model.dto.*;
 import com.apicia.model.entity.*;
 import com.apicia.repository.AnalysisReportRepository;
+import com.apicia.repository.ClientDependencyRepository;
 import com.apicia.repository.SpecVersionRepository;
 import com.apicia.repository.ViolationRepository;
+import com.apicia.service.extraction.DependencyScannerService;
 import com.apicia.service.scoring.ImpactScoringService;
 import com.apicia.service.sgm.SGMService;
 import io.swagger.parser.OpenAPIParser;
 import io.swagger.v3.parser.core.models.SwaggerParseResult;
 import io.swagger.v3.oas.models.OpenAPI;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,6 +33,8 @@ public class AnalysisService {
     private final ViolationRepository violationRepository;
     private final SGMService sgmService;
     private final ImpactScoringService impactScoringService;
+    private final ClientDependencyRepository clientDependencyRepository;
+    private final DependencyScannerService dependencyScannerService;
 
     @Value("${cia.weights.w1}")
     private double w1;
@@ -38,12 +44,16 @@ public class AnalysisService {
             AnalysisReportRepository analysisReportRepository,
             ViolationRepository violationRepository,
             SGMService sgmService,
-            ImpactScoringService impactScoringService) {
+            ImpactScoringService impactScoringService,
+            ClientDependencyRepository clientDependencyRepository,
+            DependencyScannerService dependencyScannerService) {
         this.specVersionRepository = specVersionRepository;
         this.analysisReportRepository = analysisReportRepository;
         this.violationRepository = violationRepository;
         this.sgmService = sgmService;
         this.impactScoringService = impactScoringService;
+        this.clientDependencyRepository = clientDependencyRepository;
+        this.dependencyScannerService = dependencyScannerService;
     }
 
     public AnalysisResponseDTO compare(AnalysisRequestDTO request) {
@@ -106,6 +116,7 @@ public class AnalysisService {
                 .newVersion(newSpec.getVersionLabel())
                 .sgm(sgmResult)
                 .impactScore(scoreResult)
+                .blastRadius(calculateBlastRadius(sgmResult.getViolations()))
                 .build();
     }
 
@@ -191,7 +202,117 @@ public class AnalysisService {
                 .newVersion(report.getNewSpec() != null ? report.getNewSpec().getVersionLabel() : null)
                 .sgm(sgm)
                 .impactScore(impactScore)
+                .blastRadius(calculateBlastRadius(violationDTOs))
                 .build();
+    }
+
+    private BlastRadiusDTO calculateBlastRadius(List<ViolationDTO> violations) {
+        if (violations == null || violations.isEmpty()) {
+            return BlastRadiusDTO.builder()
+                    .totalImpactedConsumers(0)
+                    .impactedEndpoints(new ArrayList<>())
+                    .build();
+        }
+
+        Map<String, ImpactedEndpointDTO> impactedMap = new LinkedHashMap<>();
+        Set<String> uniqueConsumerProjects = new HashSet<>();
+
+        for (ViolationDTO violation : violations) {
+            String severity = violation.getSeverity();
+            if ("BREAKING".equals(severity) || "CRITICAL".equals(severity)) {
+                String httpMethod = resolveHttpMethod(violation);
+                String rawPath = resolvePath(violation);
+                String normalizedPath = dependencyScannerService.normalizePath(rawPath);
+
+                String key = httpMethod + ":" + normalizedPath;
+
+                List<com.apicia.model.entity.ClientDependency> deps = clientDependencyRepository.findByHttpMethodIgnoreCaseAndNormalizedPath(httpMethod, normalizedPath);
+                if (deps.isEmpty()) {
+                    continue;
+                }
+
+                ImpactedEndpointDTO endpointDTO = impactedMap.computeIfAbsent(key, k -> ImpactedEndpointDTO.builder()
+                        .endpoint(rawPath)
+                        .method(httpMethod)
+                        .violations(new ArrayList<>())
+                        .consumers(new ArrayList<>())
+                        .build());
+
+                if (!endpointDTO.getViolations().contains(violation.getMessage())) {
+                    endpointDTO.getViolations().add(violation.getMessage());
+                }
+
+                for (com.apicia.model.entity.ClientDependency dep : deps) {
+                    uniqueConsumerProjects.add(dep.getClientProject().getProjectName());
+
+                    boolean alreadyExists = endpointDTO.getConsumers().stream()
+                            .anyMatch(c -> c.getProjectName().equals(dep.getClientProject().getProjectName())
+                                    && c.getFile().equals(dep.getFilePath())
+                                    && c.getLine() == dep.getLineNumber());
+
+                    if (!alreadyExists) {
+                        endpointDTO.getConsumers().add(ImpactedConsumerDTO.builder()
+                                .projectName(dep.getClientProject().getProjectName())
+                                .file(dep.getFilePath())
+                                .line(dep.getLineNumber())
+                                .build());
+                    }
+                }
+            }
+        }
+
+        return BlastRadiusDTO.builder()
+                .totalImpactedConsumers(uniqueConsumerProjects.size())
+                .impactedEndpoints(new ArrayList<>(impactedMap.values()))
+                .build();
+    }
+
+    private String resolveHttpMethod(ViolationDTO dto) {
+        String ep = dto.getEndpoint();
+        if (ep != null) {
+            ep = ep.trim();
+            if (ep.startsWith("GET ") || ep.startsWith("POST ") || ep.startsWith("PUT ") || ep.startsWith("DELETE ") || ep.startsWith("PATCH ")) {
+                return ep.split(" ")[0].toUpperCase();
+            }
+        }
+
+        String msg = dto.getMessage();
+        if (msg != null) {
+            String upper = msg.toUpperCase();
+            for (String m : List.of("GET", "POST", "PUT", "DELETE", "PATCH")) {
+                if (upper.contains(" " + m + " ") || upper.contains(" " + m + "/") || upper.startsWith(m + " ")) {
+                    return m;
+                }
+            }
+        }
+
+        if ("SGM-006".equals(dto.getRuleId())) {
+            if (dto.getOldValue() != null && List.of("GET", "POST", "PUT", "DELETE", "PATCH").contains(dto.getOldValue().toUpperCase())) {
+                return dto.getOldValue().toUpperCase();
+            }
+        }
+
+        return "GET";
+    }
+
+    private String resolvePath(ViolationDTO dto) {
+        if (dto.getOldPath() != null && dto.getOldPath().startsWith("/")) {
+            return dto.getOldPath();
+        }
+        String ep = dto.getEndpoint();
+        if (ep != null) {
+            ep = ep.trim();
+            if (ep.startsWith("GET ") || ep.startsWith("POST ") || ep.startsWith("PUT ") || ep.startsWith("DELETE ") || ep.startsWith("PATCH ")) {
+                return ep.substring(ep.indexOf(' ') + 1);
+            }
+            if (ep.startsWith("/")) {
+                return ep;
+            }
+        }
+        if (dto.getNewPath() != null && dto.getNewPath().startsWith("/")) {
+            return dto.getNewPath();
+        }
+        return ep != null ? ep : "/";
     }
 }
 
