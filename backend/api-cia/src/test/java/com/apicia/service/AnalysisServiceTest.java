@@ -93,4 +93,42 @@ public class AnalysisServiceTest {
         assertEquals("UserBff", ie.getConsumers().get(0).getProjectName());
         assertEquals(42, ie.getConsumers().get(0).getLine());
     }
+
+    @Test
+    public void testCompareInMemory() {
+        SpecVersion oldSpec = SpecVersion.builder()
+                .id(1L)
+                .versionLabel("v1")
+                .rawContent("{\"openapi\": \"3.0.0\"}")
+                .build();
+        SpecVersion newSpec = SpecVersion.builder()
+                .id(2L)
+                .versionLabel("v2")
+                .rawContent("{\"openapi\": \"3.0.0\"}")
+                .build();
+
+        SGMResultDTO sgmResult = SGMResultDTO.builder()
+                .violations(new ArrayList<>())
+                .dStruct(0.0)
+                .build();
+        when(sgmService.analyze(any(), any())).thenReturn(sgmResult);
+
+        ImpactScoreDTO impactScore = ImpactScoreDTO.builder()
+                .sTotal(0.0)
+                .riskLevel("LOW")
+                .build();
+        when(impactScoringService.calculate(0.0)).thenReturn(impactScore);
+
+        AnalysisResponseDTO response = analysisService.compareInMemory(oldSpec, newSpec);
+
+        assertNotNull(response);
+        assertNull(response.getReportId());
+        assertEquals("v1", response.getOldVersion());
+        assertEquals("v2", response.getNewVersion());
+        assertEquals(1L, response.getOldSpecId());
+        assertEquals(2L, response.getNewSpecId());
+
+        verify(analysisReportRepository, never()).save(any());
+        verify(violationRepository, never()).save(any());
+    }
 }

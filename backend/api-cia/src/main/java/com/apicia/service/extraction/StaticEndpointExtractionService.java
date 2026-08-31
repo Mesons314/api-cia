@@ -63,7 +63,11 @@ public class StaticEndpointExtractionService {
     }
 
     public List<ExtractedEndpoint> extractEndpoints() {
-        Path sourceRoot = sourceRoot();
+        return extractEndpoints(null);
+    }
+
+    public List<ExtractedEndpoint> extractEndpoints(String sourceRootOverride) {
+        Path sourceRoot = sourceRoot(sourceRootOverride);
         if (!Files.isDirectory(sourceRoot)) {
             throw new IllegalStateException("Endpoint extraction source root does not exist: " + sourceRoot);
         }
@@ -130,7 +134,11 @@ public class StaticEndpointExtractionService {
     }
 
     public Map<String, Object> generateOpenApi() {
-        List<ExtractedEndpoint> endpoints = extractEndpoints();
+        return generateOpenApi(null);
+    }
+
+    public Map<String, Object> generateOpenApi(String sourceRootOverride) {
+        List<ExtractedEndpoint> endpoints = extractEndpoints(sourceRootOverride);
         Map<String, Object> spec = new LinkedHashMap<>();
         spec.put("openapi", "3.0.3");
         spec.put("info", Map.of(
@@ -711,7 +719,12 @@ public class StaticEndpointExtractionService {
     }
 
     private Path sourceRoot() {
-        Path configured = Paths.get(properties.getSourceRoot());
+        return sourceRoot(null);
+    }
+
+    private Path sourceRoot(String override) {
+        String rootStr = (override != null && !override.trim().isEmpty()) ? override : properties.getSourceRoot();
+        Path configured = Paths.get(rootStr);
         if (configured.isAbsolute()) {
             return configured.normalize();
         }

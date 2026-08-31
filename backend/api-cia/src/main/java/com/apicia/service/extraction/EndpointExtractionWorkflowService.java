@@ -48,12 +48,20 @@ public class EndpointExtractionWorkflowService {
     }
 
     public Map<String, Object> generateOpenApi() {
-        return extractionService.generateOpenApi();
+        return generateOpenApi(null);
+    }
+
+    public Map<String, Object> generateOpenApi(String sourceRootOverride) {
+        return extractionService.generateOpenApi(sourceRootOverride);
     }
 
     public String generateOpenApiJson() {
+        return generateOpenApiJson(null);
+    }
+
+    public String generateOpenApiJson(String sourceRootOverride) {
         try {
-            return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(generateOpenApi());
+            return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(generateOpenApi(sourceRootOverride));
         } catch (JsonProcessingException ex) {
             throw new InvalidSpecException("Unable to serialize extracted OpenAPI contract", ex);
         }
@@ -198,6 +206,60 @@ public class EndpointExtractionWorkflowService {
                             .riskLevel("LOW")
                             .breakdown(new HashMap<>())
                             .build())
+                    .newSpecId(currentSpec.getId())
+                    .newSpecTimestamp(currentSpec.getUploadedAt() != null ? currentSpec.getUploadedAt().toString() : null)
+                    .build();
+        }
+    }
+
+    @Transactional(readOnly = true)
+    public AnalysisResponseDTO generateAndAnalyzePreview(String customVersionLabel, String sourceRootOverride) {
+        migrateNullProjectsAndVersions();
+        String rawContent = generateOpenApiJson(sourceRootOverride);
+        OpenAPI openAPI = parse(rawContent);
+        int totalEndpoints = countEndpoints(openAPI);
+
+        String projectId = properties.getProjectId();
+        String version = properties.getVersion();
+
+        List<SpecVersion> projectSpecs = specVersionRepository.findByProjectId(projectId);
+
+        String label = (customVersionLabel != null && !customVersionLabel.trim().isEmpty())
+                ? customVersionLabel
+                : versionLabel(projectId, version);
+
+        SpecVersion transientCurrent = SpecVersion.builder()
+                .versionLabel(label)
+                .projectId(projectId)
+                .version(version)
+                .fileName(SNAPSHOT_FILE_NAME)
+                .rawContent(rawContent)
+                .totalEndpoints(totalEndpoints)
+                .build();
+
+        SpecVersion baseSpec = findBaseSpec(transientCurrent, projectSpecs);
+
+        if (baseSpec != null) {
+            return analysisService.compareInMemory(baseSpec, transientCurrent);
+        } else {
+            return AnalysisResponseDTO.builder()
+                    .reportId(null)
+                    .oldVersion(null)
+                    .newVersion(transientCurrent.getVersionLabel())
+                    .sgm(SGMResultDTO.builder()
+                            .totalViolations(0)
+                            .breakingCount(0)
+                            .warningCount(0)
+                            .infoCount(0)
+                            .violations(new ArrayList<>())
+                            .build())
+                    .impactScore(ImpactScoreDTO.builder()
+                            .sTotal(0.0)
+                            .riskLevel("LOW")
+                            .breakdown(new HashMap<>())
+                            .build())
+                    .newSpecId(null)
+                    .newSpecTimestamp(LocalDateTime.now().toString())
                     .build();
         }
     }

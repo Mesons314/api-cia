@@ -37,7 +37,13 @@ public class ExtractionController {
     }
 
     @GetMapping(value = "/openapi.json", produces = MediaType.APPLICATION_JSON_VALUE)
-    public AnalysisResponseDTO openApiJson() {
+    public AnalysisResponseDTO openApiJson(
+            @RequestParam(name = "preview", defaultValue = "false") boolean preview,
+            @RequestParam(name = "versionLabel", required = false) String versionLabel,
+            @RequestParam(name = "sourceRoot", required = false) String sourceRoot) {
+        if (preview) {
+            return workflowService.generateAndAnalyzePreview(versionLabel, sourceRoot);
+        }
         return workflowService.generateAndAnalyze();
     }
 

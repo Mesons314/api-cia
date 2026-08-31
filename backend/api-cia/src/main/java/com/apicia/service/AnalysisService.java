@@ -117,6 +117,40 @@ public class AnalysisService {
                 .sgm(sgmResult)
                 .impactScore(scoreResult)
                 .blastRadius(calculateBlastRadius(sgmResult.getViolations()))
+                .oldSpecId(oldSpec.getId())
+                .oldSpecTimestamp(oldSpec.getUploadedAt() != null ? oldSpec.getUploadedAt().toString() : null)
+                .newSpecId(newSpec.getId())
+                .newSpecTimestamp(newSpec.getUploadedAt() != null ? newSpec.getUploadedAt().toString() : null)
+                .build();
+    }
+
+    public AnalysisResponseDTO compareInMemory(SpecVersion oldSpec, SpecVersion newSpec) {
+        SwaggerParseResult r1 = new OpenAPIParser().readContents(oldSpec.getRawContent(), null, null);
+        OpenAPI oldAPI = r1.getOpenAPI();
+        if (oldAPI == null) {
+            throw new InvalidSpecException("Not valid OpenAPI content for old spec: " + oldSpec.getVersionLabel());
+        }
+
+        SwaggerParseResult r2 = new OpenAPIParser().readContents(newSpec.getRawContent(), null, null);
+        OpenAPI newAPI = r2.getOpenAPI();
+        if (newAPI == null) {
+            throw new InvalidSpecException("Not valid OpenAPI content for new spec: " + newSpec.getVersionLabel());
+        }
+
+        SGMResultDTO sgmResult = sgmService.analyze(oldAPI, newAPI);
+        ImpactScoreDTO scoreResult = impactScoringService.calculate(sgmResult.getDStruct());
+
+        return AnalysisResponseDTO.builder()
+                .reportId(null)
+                .oldVersion(oldSpec.getVersionLabel())
+                .newVersion(newSpec.getVersionLabel())
+                .sgm(sgmResult)
+                .impactScore(scoreResult)
+                .blastRadius(calculateBlastRadius(sgmResult.getViolations()))
+                .oldSpecId(oldSpec.getId())
+                .oldSpecTimestamp(oldSpec.getUploadedAt() != null ? oldSpec.getUploadedAt().toString() : null)
+                .newSpecId(newSpec.getId())
+                .newSpecTimestamp(newSpec.getUploadedAt() != null ? newSpec.getUploadedAt().toString() : null)
                 .build();
     }
 
@@ -203,6 +237,10 @@ public class AnalysisService {
                 .sgm(sgm)
                 .impactScore(impactScore)
                 .blastRadius(calculateBlastRadius(violationDTOs))
+                .oldSpecId(report.getOldSpec() != null ? report.getOldSpec().getId() : null)
+                .oldSpecTimestamp(report.getOldSpec() != null && report.getOldSpec().getUploadedAt() != null ? report.getOldSpec().getUploadedAt().toString() : null)
+                .newSpecId(report.getNewSpec() != null ? report.getNewSpec().getId() : null)
+                .newSpecTimestamp(report.getNewSpec() != null && report.getNewSpec().getUploadedAt() != null ? report.getNewSpec().getUploadedAt().toString() : null)
                 .build();
     }
 

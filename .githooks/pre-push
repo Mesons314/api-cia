@@ -1,0 +1,188 @@
+#!/bin/bash
+
+# Git pre-push hook for API Change Impact Analysis
+# Read remote details from stdin (if any) to get the target commit hash
+read local_ref local_sha remote_ref remote_sha
+
+if [ -z "$local_sha" ] || [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+    local_sha=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+else
+    local_sha=$(git rev-parse --short "$local_sha" 2>/dev/null || echo "unknown")
+fi
+
+# Dynamically resolve the source root of the project being pushed
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
+    REPO_ROOT=$(cygpath -w "$REPO_ROOT")
+    REPO_ROOT=${REPO_ROOT//\//\\}
+    SOURCE_ROOT="${REPO_ROOT}\\src\\main\\java"
+else
+    SOURCE_ROOT="${REPO_ROOT}/src/main/java"
+fi
+
+# URL encode the SOURCE_ROOT for the query parameter
+ENCODED_SOURCE_ROOT=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1]))" "$SOURCE_ROOT" 2>/dev/null)
+if [ -z "$ENCODED_SOURCE_ROOT" ]; then
+    ENCODED_SOURCE_ROOT=$(python -c "import urllib, sys; print(urllib.quote(sys.argv[1]))" "$SOURCE_ROOT" 2>/dev/null)
+fi
+if [ -z "$ENCODED_SOURCE_ROOT" ]; then
+    ENCODED_SOURCE_ROOT="$SOURCE_ROOT"
+fi
+
+BACKEND_URL="http://localhost:8080/api/extraction/openapi.json?preview=true&versionLabel=commit-${local_sha}&sourceRoot=${ENCODED_SOURCE_ROOT}"
+
+# Check connection to backend
+RESPONSE=$(curl -s -f --connect-timeout 4 "$BACKEND_URL" 2>&1)
+CURL_STATUS=$?
+
+if [ $CURL_STATUS -ne 0 ] || [ -z "$RESPONSE" ]; then
+    echo "ERROR: API Analyzer backend is unavailable."
+    echo "Push blocked because API impact analysis could not be completed."
+    exit 1
+fi
+
+# Use python to parse and display report
+REPORT=$(python3 -c "
+import sys, json
+
+try:
+    data = json.loads(sys.argv[1])
+except Exception as e:
+    print('ERROR: Unable to generate API contract.\nPush blocked.')
+    sys.exit(1)
+
+if 'error' in data or ('status' in data and data['status'] >= 400):
+    print('ERROR: Unable to generate API contract.\nPush blocked.')
+    sys.exit(1)
+
+print('==================================================')
+print('API CHANGE IMPACT ANALYSIS')
+print('==========================')
+print('')
+print('Base Contract:')
+print(f'  ID: {data.get(\"oldSpecId\", \"N/A\")}')
+print(f'  Version/Label: {data.get(\"oldVersion\", \"N/A\")}')
+print(f'  Timestamp: {data.get(\"oldSpecTimestamp\", \"N/A\")}')
+print('')
+print('Current Contract:')
+print(f'  ID: {data.get(\"newSpecId\") or \"Transient\"}')
+print(f'  Version/Label: {data.get(\"newVersion\", \"N/A\")}')
+print(f'  Timestamp: {data.get(\"newSpecTimestamp\", \"N/A\")}')
+print('')
+print('---')
+print('')
+print('## Detected Changes')
+print('')
+
+sgm = data.get('sgm', {})
+violations = sgm.get('violations', [])
+if not violations:
+    print('No API changes detected.')
+else:
+    for v in violations:
+        severity = v.get('severity', 'INFO')
+        msg = v.get('message', '')
+        endpoint = v.get('endpoint', '')
+        change_type = v.get('changeType', '')
+        print(f'[{severity}] {msg}')
+        if v.get('oldValue') and v.get('newValue') and change_type == 'ENDPOINT_RENAMED':
+            print(f'  {v.get(\"oldValue\")}')
+            print('  ↓')
+            print(f'  {v.get(\"newValue\")}')
+        print('')
+
+print('---')
+print('')
+impact = data.get('impactScore', {})
+sTotal = impact.get('sTotal', 0.0)
+riskLevel = impact.get('riskLevel', 'LOW')
+
+print(f'Risk Score: {int(sTotal * 100)}/100')
+print(f'Risk Level: {riskLevel}')
+print('----------------')
+" "$RESPONSE" 2>/dev/null)
+
+PYTHON_STATUS=$?
+if [ $PYTHON_STATUS -ne 0 ]; then
+    # Fallback to python (python 2 syntax compatibility)
+    REPORT=$(python -c "
+import sys, json
+
+try:
+    data = json.loads(sys.argv[1])
+except Exception as e:
+    print('ERROR: Unable to generate API contract.\nPush blocked.')
+    sys.exit(1)
+
+if 'error' in data or ('status' in data and data['status'] >= 400):
+    print('ERROR: Unable to generate API contract.\nPush blocked.')
+    sys.exit(1)
+
+print('==================================================')
+print('API CHANGE IMPACT ANALYSIS')
+print('==========================')
+print('')
+print('Base Contract:')
+print('  ID: {}'.format(data.get('oldSpecId', 'N/A')))
+print('  Version/Label: {}'.format(data.get('oldVersion', 'N/A')))
+print('  Timestamp: {}'.format(data.get('oldSpecTimestamp', 'N/A')))
+print('')
+print('Current Contract:')
+print('  ID: {}'.format(data.get('newSpecId') or 'Transient'))
+print('  Version/Label: {}'.format(data.get('newVersion', 'N/A')))
+print('  Timestamp: {}'.format(data.get('newSpecTimestamp', 'N/A')))
+print('')
+print('---')
+print('')
+print('## Detected Changes')
+print('')
+
+sgm = data.get('sgm', {})
+violations = sgm.get('violations', [])
+if not violations:
+    print('No API changes detected.')
+else:
+    for v in violations:
+        severity = v.get('severity', 'INFO')
+        msg = v.get('message', '')
+        endpoint = v.get('endpoint', '')
+        change_type = v.get('changeType', '')
+        print('[{}] {}'.format(severity, msg))
+        if v.get('oldValue') and v.get('newValue') and change_type == 'ENDPOINT_RENAMED':
+            print('  {}'.format(v.get('oldValue')))
+            print('  ↓')
+            print('  {}'.format(v.get('newValue')))
+        print('')
+
+print('---')
+print('')
+impact = data.get('impactScore', {})
+sTotal = impact.get('sTotal', 0.0)
+riskLevel = impact.get('riskLevel', 'LOW')
+
+print('Risk Score: {}/100'.format(int(sTotal * 100)))
+print('Risk Level: {}'.format(riskLevel))
+print('----------------')
+" "$RESPONSE" 2>/dev/null)
+    PYTHON_STATUS=$?
+fi
+
+if [ $PYTHON_STATUS -ne 0 ] || [[ "$REPORT" == *"ERROR:"* ]]; then
+    echo "ERROR: Unable to generate API contract."
+    echo "Push blocked."
+    exit 1
+fi
+
+echo "$REPORT"
+
+# Prompt user interactively via /dev/tty
+echo -n "Do you want to continue with this push? (y/N): "
+read yn < /dev/tty
+
+if [[ "$yn" =~ ^[yY](es)?$ ]]; then
+    echo "Push approved. Proceeding..."
+    exit 0
+else
+    echo "ERROR: Push aborted because the user did not approve the API impact report."
+    exit 1
+fi
