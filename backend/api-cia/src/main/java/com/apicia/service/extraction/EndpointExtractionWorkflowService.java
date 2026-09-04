@@ -235,6 +235,7 @@ public class EndpointExtractionWorkflowService {
                 .fileName(SNAPSHOT_FILE_NAME)
                 .rawContent(rawContent)
                 .totalEndpoints(totalEndpoints)
+                .uploadedAt(LocalDateTime.now())
                 .build();
 
         SpecVersion baseSpec = findBaseSpec(transientCurrent, projectSpecs);
@@ -281,6 +282,8 @@ public class EndpointExtractionWorkflowService {
             return null;
         }
 
+        LocalDateTime currentUploadTime = currentSpec.getUploadedAt() != null ? currentSpec.getUploadedAt() : LocalDateTime.now();
+
         List<SpecVersion> candidates = projectSpecs.stream()
                 .filter(s -> s.getId() != null && !s.getId().equals(currentSpec.getId()))
                 .toList();
@@ -290,10 +293,10 @@ public class EndpointExtractionWorkflowService {
         }
 
         List<SpecVersion> sameVersionOlder = candidates.stream()
-                .filter(s -> currentSpec.getVersion().equals(s.getVersion()))
-                .filter(s -> s.getUploadedAt() != null && currentSpec.getUploadedAt() != null &&
-                             (s.getUploadedAt().isBefore(currentSpec.getUploadedAt()) || 
-                              (s.getUploadedAt().equals(currentSpec.getUploadedAt()) && s.getId() < currentSpec.getId())))
+                .filter(s -> currentSpec.getVersion() != null && currentSpec.getVersion().equals(s.getVersion()))
+                .filter(s -> currentSpec.getId() == null || (s.getUploadedAt() != null &&
+                             (s.getUploadedAt().isBefore(currentUploadTime) || 
+                              (s.getUploadedAt().equals(currentUploadTime) && s.getId() < currentSpec.getId()))))
                 .toList();
 
         if (!sameVersionOlder.isEmpty()) {
@@ -309,7 +312,8 @@ public class EndpointExtractionWorkflowService {
         }
 
         List<SpecVersion> predecessors = candidates.stream()
-                .filter(s -> com.apicia.util.VersionComparator.compareVersions(s.getVersion(), currentSpec.getVersion()) < 0)
+                .filter(s -> s.getVersion() != null && currentSpec.getVersion() != null &&
+                        com.apicia.util.VersionComparator.compareVersions(s.getVersion(), currentSpec.getVersion()) < 0)
                 .toList();
 
         if (!predecessors.isEmpty()) {
@@ -331,9 +335,6 @@ public class EndpointExtractionWorkflowService {
         }
 
         return candidates.stream()
-                .filter(s -> s.getUploadedAt() != null && currentSpec.getUploadedAt() != null &&
-                             (s.getUploadedAt().isBefore(currentSpec.getUploadedAt()) || 
-                              (s.getUploadedAt().equals(currentSpec.getUploadedAt()) && s.getId() < currentSpec.getId())))
                 .max((s1, s2) -> {
                     if (s1.getUploadedAt() != null && s2.getUploadedAt() != null) {
                         int c = s1.getUploadedAt().compareTo(s2.getUploadedAt());

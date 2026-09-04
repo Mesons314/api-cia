@@ -41,12 +41,22 @@ import org.springframework.util.StringUtils;
 public class StaticEndpointExtractionService {
 
     private static final List<String> DEFAULT_REQUEST_METHODS = List.of("get", "post", "put", "delete", "patch");
-    private static final Map<String, String> MAPPING_METHODS = Map.of(
-            "GetMapping", "get",
-            "PostMapping", "post",
-            "PutMapping", "put",
-            "DeleteMapping", "delete",
-            "PatchMapping", "patch"
+    private static final Map<String, String> MAPPING_METHODS = Map.ofEntries(
+            Map.entry("GetMapping", "get"),
+            Map.entry("PostMapping", "post"),
+            Map.entry("PutMapping", "put"),
+            Map.entry("DeleteMapping", "delete"),
+            Map.entry("PatchMapping", "patch"),
+            Map.entry("MessageMapping", "post"),
+            Map.entry("SubscribeMapping", "get")
+    );
+
+    private static final Set<String> WEBSOCKET_FRAMEWORK_TYPES = Set.of(
+            "SimpMessageHeaderAccessor", "MessageHeaderAccessor", "HeaderAccessor",
+            "MessageHeaders", "Message", "Principal", "Authentication", "StompHeaderAccessor",
+            "SessionDisconnectEvent", "SessionSubscribeEvent", "SessionConnectedEvent",
+            "SimpMessagingTemplate", "HttpServletRequest", "HttpServletResponse", "HttpSession",
+            "BindingResult", "Errors", "Model", "ModelMap"
     );
 
     private final EndpointExtractionProperties properties;
@@ -232,8 +242,21 @@ public class StaticEndpointExtractionService {
     }
 
     private void enrichParameters(ExtractedEndpoint endpoint, MethodDeclaration method) {
+        boolean isWs = hasAnnotation(method, "MessageMapping") || hasAnnotation(method, "SubscribeMapping");
+        Parameter potentialPayloadParam = null;
+
         for (Parameter parameter : method.getParameters()) {
-            if (hasAnnotation(parameter, "RequestBody")) {
+            String paramType = parameter.getType().asString();
+            String simpleParamType = paramType.contains("<") ? paramType.substring(0, paramType.indexOf('<')) : paramType;
+            if (simpleParamType.contains(".")) {
+                simpleParamType = simpleParamType.substring(simpleParamType.lastIndexOf('.') + 1);
+            }
+
+            if (WEBSOCKET_FRAMEWORK_TYPES.contains(simpleParamType)) {
+                continue;
+            }
+
+            if (hasAnnotation(parameter, "RequestBody") || hasAnnotation(parameter, "Payload")) {
                 ExtractedRequestBody body = new ExtractedRequestBody();
                 body.setJavaType(parameter.getType().asString());
                 body.setRequired(required(parameter, true));
@@ -243,11 +266,11 @@ public class StaticEndpointExtractionService {
             }
 
             String in = null;
-            if (hasAnnotation(parameter, "PathVariable")) {
+            if (hasAnnotation(parameter, "PathVariable") || hasAnnotation(parameter, "DestinationVariable")) {
                 in = "path";
             } else if (hasAnnotation(parameter, "RequestParam")) {
                 in = "query";
-            } else if (hasAnnotation(parameter, "RequestHeader")) {
+            } else if (hasAnnotation(parameter, "RequestHeader") || hasAnnotation(parameter, "Header")) {
                 in = "header";
             }
 
@@ -259,13 +282,39 @@ public class StaticEndpointExtractionService {
                 extracted.setRequired("path".equals(in) || required(parameter, true));
                 extracted.getValidations().putAll(validations(parameter));
                 endpoint.getParameters().add(extracted);
+            } else if (isWs && potentialPayloadParam == null) {
+                potentialPayloadParam = parameter;
             }
+        }
+
+        if (isWs && endpoint.getRequestBody() == null && potentialPayloadParam != null) {
+            ExtractedRequestBody body = new ExtractedRequestBody();
+            body.setJavaType(potentialPayloadParam.getType().asString());
+            body.setRequired(required(potentialPayloadParam, true));
+            body.getValidations().putAll(validations(potentialPayloadParam));
+            endpoint.setRequestBody(body);
         }
     }
 
     private ExtractedResponse response(MethodDeclaration method) {
         String statusCode = statusCode(method).orElse("200");
-        return new ExtractedResponse(statusCode, "Successful response", unwrapReturnType(method.getType().asString()));
+        String description = "Successful response";
+        Optional<AnnotationExpr> sendTo = annotation(method, "SendTo");
+        if (sendTo.isPresent()) {
+            List<Expression> vals = annotationValues(sendTo.get(), "value");
+            if (!vals.isEmpty()) {
+                description = "Broadcasts to " + stringValue(vals.get(0));
+            }
+        } else {
+            Optional<AnnotationExpr> sendToUser = annotation(method, "SendToUser");
+            if (sendToUser.isPresent()) {
+                List<Expression> vals = annotationValues(sendToUser.get(), "value");
+                if (!vals.isEmpty()) {
+                    description = "Sends to user " + stringValue(vals.get(0));
+                }
+            }
+        }
+        return new ExtractedResponse(statusCode, description, unwrapReturnType(method.getType().asString()));
     }
 
     private Map<String, Object> paths(List<ExtractedEndpoint> endpoints) {
@@ -502,7 +551,7 @@ public class StaticEndpointExtractionService {
     }
 
     private String parameterName(Parameter parameter) {
-        for (String annotationName : List.of("PathVariable", "RequestParam", "RequestHeader")) {
+        for (String annotationName : List.of("PathVariable", "RequestParam", "RequestHeader", "DestinationVariable", "Header")) {
             Optional<AnnotationExpr> parameterAnnotation = annotation(parameter, annotationName);
             if (parameterAnnotation.isPresent()) {
                 List<Expression> values = annotationValues(parameterAnnotation.get(), "name", "value");
@@ -724,6 +773,11 @@ public class StaticEndpointExtractionService {
 
     private Path sourceRoot(String override) {
         String rootStr = (override != null && !override.trim().isEmpty()) ? override : properties.getSourceRoot();
+        if (rootStr != null && System.getProperty("os.name", "").toLowerCase().contains("win")) {
+            if (rootStr.matches("^/[a-zA-Z]/.*")) {
+                rootStr = rootStr.substring(1, 2).toUpperCase() + ":" + rootStr.substring(2);
+            }
+        }
         Path configured = Paths.get(rootStr);
         if (configured.isAbsolute()) {
             return configured.normalize();
