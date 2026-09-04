@@ -117,6 +117,7 @@ public class AnalysisServiceTest {
                 .sTotal(0.0)
                 .riskLevel("LOW")
                 .build();
+        when(impactScoringService.calculate(eq(0.0), anyInt())).thenReturn(impactScore);
         when(impactScoringService.calculate(0.0)).thenReturn(impactScore);
 
         AnalysisResponseDTO response = analysisService.compareInMemory(oldSpec, newSpec);

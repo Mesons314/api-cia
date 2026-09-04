@@ -11,6 +11,8 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class ImpactScoreDTO {
+    private Double dStruct;
+    private Double dBlast;
     private Double sTotal;
     private String riskLevel;
     private Map<String, Double> breakdown;

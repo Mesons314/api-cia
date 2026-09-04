@@ -46,9 +46,61 @@ public class ParameterTypeChangeRule implements DesignRule {
             checkParameters(violations, path, "PUT", oldPathItem.getPut(), newPathItem.getPut());
             checkParameters(violations, path, "DELETE", oldPathItem.getDelete(), newPathItem.getDelete());
             checkParameters(violations, path, "PATCH", oldPathItem.getPatch(), newPathItem.getPatch());
+
+            checkRequestBodyType(violations, path, "GET", oldPathItem.getGet(), newPathItem.getGet());
+            checkRequestBodyType(violations, path, "POST", oldPathItem.getPost(), newPathItem.getPost());
+            checkRequestBodyType(violations, path, "PUT", oldPathItem.getPut(), newPathItem.getPut());
+            checkRequestBodyType(violations, path, "DELETE", oldPathItem.getDelete(), newPathItem.getDelete());
+            checkRequestBodyType(violations, path, "PATCH", oldPathItem.getPatch(), newPathItem.getPatch());
         }
 
         return violations;
+    }
+
+    private void checkRequestBodyType(List<ViolationDTO> violations, String path, String method, Operation oldOp, Operation newOp) {
+        if (oldOp == null || newOp == null) return;
+
+        String oldBodySchema = extractRequestBodySchema(oldOp.getRequestBody());
+        String newBodySchema = extractRequestBodySchema(newOp.getRequestBody());
+
+        if (oldBodySchema != null && newBodySchema == null) {
+            violations.add(ViolationDTO.builder()
+                    .ruleId(getRuleId())
+                    .severity("BREAKING")
+                    .endpoint(path)
+                    .message("Request body parameter of type '" + oldBodySchema + "' was removed from " + method + " " + path)
+                    .oldValue(oldBodySchema)
+                    .newValue("NONE")
+                    .build());
+        } else if (oldBodySchema != null && newBodySchema != null && !oldBodySchema.equals(newBodySchema)) {
+            violations.add(ViolationDTO.builder()
+                    .ruleId(getRuleId())
+                    .severity("BREAKING")
+                    .endpoint(path)
+                    .message("Request body payload type in " + method + " " + path + " changed from " + oldBodySchema + " to " + newBodySchema)
+                    .oldValue(oldBodySchema)
+                    .newValue(newBodySchema)
+                    .build());
+        }
+    }
+
+    private String extractRequestBodySchema(io.swagger.v3.oas.models.parameters.RequestBody requestBody) {
+        if (requestBody == null || requestBody.getContent() == null) {
+            return null;
+        }
+        for (io.swagger.v3.oas.models.media.MediaType mt : requestBody.getContent().values()) {
+            if (mt != null && mt.getSchema() != null) {
+                if (mt.getSchema().get$ref() != null) {
+                    String ref = mt.getSchema().get$ref();
+                    int lastSlash = ref.lastIndexOf('/');
+                    return lastSlash >= 0 ? ref.substring(lastSlash + 1) : ref;
+                }
+                if (mt.getSchema().getType() != null) {
+                    return mt.getSchema().getType();
+                }
+            }
+        }
+        return null;
     }
 
     private void checkParameters(List<ViolationDTO> violations, String path, String method, Operation oldOp, Operation newOp) {

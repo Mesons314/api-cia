@@ -8,12 +8,22 @@ import io.swagger.v3.oas.models.PathItem;
 import io.swagger.v3.oas.models.Operation;
 import java.util.ArrayList;
 import java.util.List;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 @Service
 public class SGMService {
 
     private final List<DesignRule> rules;
+
+    @Value("${cia.weights.severity.breaking:0.75}")
+    private double weightBreaking;
+
+    @Value("${cia.weights.severity.warning:0.20}")
+    private double weightWarning;
+
+    @Value("${cia.weights.severity.info:0.05}")
+    private double weightInfo;
 
     public SGMService(List<DesignRule> rules) {
         this.rules = rules;
@@ -62,8 +72,14 @@ public class SGMService {
         int totalEndpoints = countEndpoints(newSpec);
         double dStruct = 0.0;
         if (totalEndpoints > 0) {
-            double raw = (breakingCount * 1.0 + warningCount * 0.5 + infoCount * 0.1) / totalEndpoints;
-            dStruct = Math.min(1.0, raw);
+            double raw = (breakingCount * weightBreaking + warningCount * weightWarning + infoCount * weightInfo) / totalEndpoints;
+            if (breakingCount > 0) {
+                dStruct = Math.min(1.0, Math.max(weightBreaking, raw));
+            } else if (warningCount > 0) {
+                dStruct = Math.min(1.0, Math.max(weightWarning, raw));
+            } else {
+                dStruct = Math.min(1.0, raw);
+            }
         }
 
         return SGMResultDTO.builder()

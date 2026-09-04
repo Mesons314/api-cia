@@ -36,8 +36,11 @@ public class AnalysisService {
     private final ClientDependencyRepository clientDependencyRepository;
     private final DependencyScannerService dependencyScannerService;
 
-    @Value("${cia.weights.w1}")
+    @Value("${cia.weights.w1:0.70}")
     private double w1;
+
+    @Value("${cia.weights.w2:0.30}")
+    private double w2;
 
     public AnalysisService(
             SpecVersionRepository specVersionRepository,
@@ -78,7 +81,9 @@ public class AnalysisService {
         }
 
         SGMResultDTO sgmResult = sgmService.analyze(oldAPI, newAPI);
-        ImpactScoreDTO scoreResult = impactScoringService.calculate(sgmResult.getDStruct());
+        BlastRadiusDTO blastRadius = calculateBlastRadius(sgmResult.getViolations());
+        int consumerCount = blastRadius != null ? blastRadius.getTotalImpactedConsumers() : 0;
+        ImpactScoreDTO scoreResult = impactScoringService.calculate(sgmResult.getDStruct(), consumerCount);
 
         AnalysisReport report = AnalysisReport.builder()
                 .oldSpec(oldSpec)
@@ -116,7 +121,8 @@ public class AnalysisService {
                 .newVersion(newSpec.getVersionLabel())
                 .sgm(sgmResult)
                 .impactScore(scoreResult)
-                .blastRadius(calculateBlastRadius(sgmResult.getViolations()))
+                .blastRadius(blastRadius)
+                .dBlast(scoreResult != null ? scoreResult.getDBlast() : null)
                 .oldSpecId(oldSpec.getId())
                 .oldSpecTimestamp(oldSpec.getUploadedAt() != null ? oldSpec.getUploadedAt().toString() : null)
                 .newSpecId(newSpec.getId())
@@ -138,7 +144,9 @@ public class AnalysisService {
         }
 
         SGMResultDTO sgmResult = sgmService.analyze(oldAPI, newAPI);
-        ImpactScoreDTO scoreResult = impactScoringService.calculate(sgmResult.getDStruct());
+        BlastRadiusDTO blastRadius = calculateBlastRadius(sgmResult.getViolations());
+        int consumerCount = blastRadius != null ? blastRadius.getTotalImpactedConsumers() : 0;
+        ImpactScoreDTO scoreResult = impactScoringService.calculate(sgmResult.getDStruct(), consumerCount);
 
         return AnalysisResponseDTO.builder()
                 .reportId(null)
@@ -146,7 +154,8 @@ public class AnalysisService {
                 .newVersion(newSpec.getVersionLabel())
                 .sgm(sgmResult)
                 .impactScore(scoreResult)
-                .blastRadius(calculateBlastRadius(sgmResult.getViolations()))
+                .blastRadius(blastRadius)
+                .dBlast(scoreResult != null ? scoreResult.getDBlast() : null)
                 .oldSpecId(oldSpec.getId())
                 .oldSpecTimestamp(oldSpec.getUploadedAt() != null ? oldSpec.getUploadedAt().toString() : null)
                 .newSpecId(newSpec.getId())
@@ -221,14 +230,12 @@ public class AnalysisService {
                 .violations(violationDTOs)
                 .build();
 
-        Map<String, Double> breakdown = new LinkedHashMap<>();
-        breakdown.put("w1_dStruct", w1 * report.getDStruct());
-
-        ImpactScoreDTO impactScore = ImpactScoreDTO.builder()
-                .sTotal(report.getSTotal())
-                .riskLevel(report.getRiskLevel() != null ? report.getRiskLevel().name() : null)
-                .breakdown(breakdown)
-                .build();
+        BlastRadiusDTO blastRadius = calculateBlastRadius(violationDTOs);
+        int consumerCount = blastRadius != null ? blastRadius.getTotalImpactedConsumers() : 0;
+        double dStructVal = report.getDStruct() != null ? report.getDStruct() : 0.0;
+        ImpactScoreDTO impactScore = impactScoringService != null
+                ? impactScoringService.calculate(dStructVal, consumerCount)
+                : null;
 
         return AnalysisResponseDTO.builder()
                 .reportId(report.getId())
@@ -236,7 +243,8 @@ public class AnalysisService {
                 .newVersion(report.getNewSpec() != null ? report.getNewSpec().getVersionLabel() : null)
                 .sgm(sgm)
                 .impactScore(impactScore)
-                .blastRadius(calculateBlastRadius(violationDTOs))
+                .blastRadius(blastRadius)
+                .dBlast(impactScore != null ? impactScore.getDBlast() : null)
                 .oldSpecId(report.getOldSpec() != null ? report.getOldSpec().getId() : null)
                 .oldSpecTimestamp(report.getOldSpec() != null && report.getOldSpec().getUploadedAt() != null ? report.getOldSpec().getUploadedAt().toString() : null)
                 .newSpecId(report.getNewSpec() != null ? report.getNewSpec().getId() : null)

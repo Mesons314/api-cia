@@ -17,6 +17,7 @@ public class AnalysisResponseDTO {
 
     private ImpactScoreDTO impactScore;
     private BlastRadiusDTO blastRadius;
+    private Double dBlast;
 
     private Long oldSpecId;
     private String oldSpecTimestamp;
