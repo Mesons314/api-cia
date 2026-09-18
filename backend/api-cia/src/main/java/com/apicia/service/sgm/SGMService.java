@@ -119,6 +119,15 @@ public class SGMService {
                 case "SGM-009":
                     dto.setChangeType("ENDPOINT_RENAMED");
                     break;
+                case "SGM-010":
+                    dto.setChangeType("REST_PATH_STYLING_VIOLATION");
+                    break;
+                case "SGM-011":
+                    dto.setChangeType("VERB_IN_PATH_VIOLATION");
+                    break;
+                case "SGM-012":
+                    dto.setChangeType("ERROR_RESPONSE_STANDARDIZATION_VIOLATION");
+                    break;
                 default:
                     dto.setChangeType("API_VIOLATION");
             }
