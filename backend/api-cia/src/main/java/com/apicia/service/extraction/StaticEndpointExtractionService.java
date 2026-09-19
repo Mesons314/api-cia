@@ -166,13 +166,69 @@ public class StaticEndpointExtractionService {
             componentsMap.put("securitySchemes", schemes);
         }
         spec.put("components", componentsMap);
-        
+
+        List<SourceUnit> units = parseSourceUnits(sourceRootOverride);
+        Map<String, Object> globalError = extractGlobalErrorHandling(units);
+        if (!globalError.isEmpty()) {
+            spec.put("x-global-error-handling", globalError);
+        }
+
         spec.put("x-extraction", Map.of(
                 "mode", "static-source",
                 "sourceRoot", sourceRoot().toString(),
                 "endpointCount", endpoints.size()
         ));
         return spec;
+    }
+
+    private Map<String, Object> extractGlobalErrorHandling(List<SourceUnit> units) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        for (SourceUnit unit : units) {
+            for (ClassOrInterfaceDeclaration type : unit.compilationUnit.findAll(ClassOrInterfaceDeclaration.class)) {
+                boolean isAdvice = type.getAnnotationByName("RestControllerAdvice").isPresent()
+                        || type.getAnnotationByName("ControllerAdvice").isPresent()
+                        || type.getNameAsString().endsWith("ExceptionHandler")
+                        || type.getNameAsString().endsWith("GlobalExceptionHandler");
+
+                if (!isAdvice) {
+                    continue;
+                }
+
+                List<String> handledExceptions = new ArrayList<>();
+                String defaultReturnType = null;
+
+                for (MethodDeclaration method : type.getMethods()) {
+                    if (method.getAnnotationByName("ExceptionHandler").isPresent()) {
+                        Optional<AnnotationExpr> annot = method.getAnnotationByName("ExceptionHandler");
+                        annot.ifPresent(a -> handledExceptions.addAll(annotationValues(a, "value").stream().map(Expression::toString).toList()));
+                        if (defaultReturnType == null) {
+                            defaultReturnType = unwrapReturnType(method.getType().asString());
+                        }
+                    }
+                }
+
+                result.put("present", true);
+                result.put("handlerClass", qualifiedName(unit.compilationUnit, type));
+                result.put("handledExceptions", handledExceptions);
+                if (defaultReturnType != null && !defaultReturnType.isEmpty() && !"void".equalsIgnoreCase(defaultReturnType)) {
+                    result.put("errorResponseSchema", defaultReturnType);
+                }
+                return result;
+            }
+        }
+        return result;
+    }
+
+    public Path getSourceRoot(String override) {
+        return sourceRoot(override);
+    }
+
+    public List<SourceUnit> parseSourceUnits(String sourceRootOverride) {
+        Path root = sourceRoot(sourceRootOverride);
+        if (!Files.isDirectory(root)) {
+            return java.util.Collections.emptyList();
+        }
+        return parseSources(root);
     }
 
     private List<SourceUnit> parseSources(Path sourceRoot) {

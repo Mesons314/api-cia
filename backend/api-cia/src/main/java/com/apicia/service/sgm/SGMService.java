@@ -176,8 +176,26 @@ public class SGMService {
         if (spec == null || spec.getPaths() == null || path == null) {
             return null;
         }
-        PathItem pathItem = spec.getPaths().get(path);
+        String cleanPath = path.trim();
+        String methodPrefix = null;
+        for (String m : List.of("GET", "POST", "PUT", "DELETE", "PATCH")) {
+            if (cleanPath.toUpperCase().startsWith(m + " ")) {
+                methodPrefix = m;
+                cleanPath = cleanPath.substring(m.length() + 1).trim();
+                break;
+            }
+        }
+        PathItem pathItem = spec.getPaths().get(cleanPath);
         if (pathItem != null) {
+            if (methodPrefix != null) {
+                switch (methodPrefix) {
+                    case "GET": if (pathItem.getGet() != null) return pathItem.getGet(); break;
+                    case "POST": if (pathItem.getPost() != null) return pathItem.getPost(); break;
+                    case "PUT": if (pathItem.getPut() != null) return pathItem.getPut(); break;
+                    case "DELETE": if (pathItem.getDelete() != null) return pathItem.getDelete(); break;
+                    case "PATCH": if (pathItem.getPatch() != null) return pathItem.getPatch(); break;
+                }
+            }
             if (pathItem.getGet() != null) return pathItem.getGet();
             if (pathItem.getPost() != null) return pathItem.getPost();
             if (pathItem.getPut() != null) return pathItem.getPut();

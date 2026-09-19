@@ -97,7 +97,25 @@ public class ConsistentErrorResponseRuleTest {
         spec.path("/api/users", pathItem);
 
         List<ViolationDTO> violations = rule.evaluate(null, spec);
-
         assertTrue(violations.isEmpty(), "Documented structured ErrorResponse should produce no violations");
+    }
+
+    @Test
+    public void testGlobalExceptionHandlerSuppressesWarnings() {
+        OpenAPI spec = new OpenAPI();
+        PathItem pathItem = new PathItem();
+        Operation getOp = new Operation();
+        ApiResponses responses = new ApiResponses();
+        responses.addApiResponse("200", new ApiResponse());
+        getOp.setResponses(responses);
+        pathItem.setGet(getOp);
+        spec.path("/api/users", pathItem);
+
+        // Add x-global-error-handling extension
+        spec.addExtension("x-global-error-handling", java.util.Map.of("present", true, "handlerClass", "com.example.GlobalExceptionHandler"));
+
+        List<ViolationDTO> violations = rule.evaluate(null, spec);
+
+        assertTrue(violations.isEmpty(), "Active GlobalExceptionHandler should suppress endpoint-level missing error warnings");
     }
 }

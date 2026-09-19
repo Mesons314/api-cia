@@ -31,6 +31,10 @@ public class ConsistentErrorResponseRule implements DesignRule {
             return Collections.emptyList();
         }
 
+        if (hasGlobalErrorHandler(newSpec)) {
+            return Collections.emptyList();
+        }
+
         List<ViolationDTO> violations = new ArrayList<>();
 
         for (Map.Entry<String, PathItem> entry : newSpec.getPaths().entrySet()) {
@@ -51,12 +55,27 @@ public class ConsistentErrorResponseRule implements DesignRule {
     private void checkOperation(List<ViolationDTO> violations, String path, String httpMethod, Operation operation) {
         if (operation == null) return;
 
+        String controller = null;
+        String method = null;
+        if (operation.getExtensions() != null) {
+            String cClass = (String) operation.getExtensions().get("x-controller-class");
+            if (cClass != null) {
+                int idx = cClass.lastIndexOf('.');
+                controller = idx >= 0 ? cClass.substring(idx + 1) : cClass;
+            }
+            method = (String) operation.getExtensions().get("x-controller-method");
+        }
+
         ApiResponses responses = operation.getResponses();
         if (responses == null || responses.isEmpty()) {
             violations.add(ViolationDTO.builder()
                     .ruleId(getRuleId())
                     .severity("WARNING")
                     .endpoint(httpMethod + " " + path)
+                    .oldPath(path)
+                    .newPath(path)
+                    .controller(controller)
+                    .method(method)
                     .message("Consistent Error Response: Endpoint '" + httpMethod + " " + path + "' does not document any responses.")
                     .oldValue("N/A")
                     .newValue("No Responses")
@@ -73,7 +92,7 @@ public class ConsistentErrorResponseRule implements DesignRule {
 
             if (isErrorCode(statusCode)) {
                 hasErrorResponse = true;
-                checkErrorStructure(violations, path, httpMethod, statusCode, response);
+                checkErrorStructure(violations, path, httpMethod, statusCode, response, controller, method);
             }
         }
 
@@ -83,6 +102,10 @@ public class ConsistentErrorResponseRule implements DesignRule {
                     .ruleId(getRuleId())
                     .severity("WARNING")
                     .endpoint(httpMethod + " " + path)
+                    .oldPath(path)
+                    .newPath(path)
+                    .controller(controller)
+                    .method(method)
                     .message("Consistent Error Response: Endpoint '" + httpMethod + " " + path + "' does not document any error payloads (e.g., 400 Bad Request, 404 Not Found, 500 Internal Server Error).")
                     .oldValue("N/A")
                     .newValue("Missing Error Response Docs")
@@ -103,12 +126,16 @@ public class ConsistentErrorResponseRule implements DesignRule {
         }
     }
 
-    private void checkErrorStructure(List<ViolationDTO> violations, String path, String httpMethod, String statusCode, ApiResponse response) {
+    private void checkErrorStructure(List<ViolationDTO> violations, String path, String httpMethod, String statusCode, ApiResponse response, String controller, String method) {
         if (response.getContent() == null || response.getContent().isEmpty()) {
             violations.add(ViolationDTO.builder()
                     .ruleId(getRuleId())
                     .severity("WARNING")
                     .endpoint(httpMethod + " " + path)
+                    .oldPath(path)
+                    .newPath(path)
+                    .controller(controller)
+                    .method(method)
                     .message("Consistent Error Response: Error response '" + statusCode + "' in endpoint '" + httpMethod + " " + path + "' has an empty body schema. It should return a standardized error structure (e.g., ErrorResponse).")
                     .oldValue("N/A")
                     .newValue("Empty Error Schema")
@@ -125,6 +152,10 @@ public class ConsistentErrorResponseRule implements DesignRule {
                         .ruleId(getRuleId())
                         .severity("WARNING")
                         .endpoint(httpMethod + " " + path)
+                        .oldPath(path)
+                        .newPath(path)
+                        .controller(controller)
+                        .method(method)
                         .message("Consistent Error Response: Error response '" + statusCode + "' (" + mediaTypeName + ") in endpoint '" + httpMethod + " " + path + "' does not define a schema structure.")
                         .oldValue("N/A")
                         .newValue("Missing Schema")
@@ -142,11 +173,37 @@ public class ConsistentErrorResponseRule implements DesignRule {
                         .ruleId(getRuleId())
                         .severity("WARNING")
                         .endpoint(httpMethod + " " + path)
+                        .oldPath(path)
+                        .newPath(path)
+                        .controller(controller)
+                        .method(method)
                         .message("Consistent Error Response: Error response '" + statusCode + "' in endpoint '" + httpMethod + " " + path + "' returns raw text/string instead of a standardized structured error object (e.g., ErrorResponse).")
                         .oldValue("String/Text")
                         .newValue("ErrorResponse Object Required")
                         .build());
             }
         }
+    }
+
+    private boolean hasGlobalErrorHandler(OpenAPI spec) {
+        if (spec == null) return false;
+        if (spec.getExtensions() != null) {
+            Object xGlobal = spec.getExtensions().get("x-global-error-handling");
+            if (xGlobal instanceof Map) {
+                Map<?, ?> map = (Map<?, ?>) xGlobal;
+                if (Boolean.TRUE.equals(map.get("present")) || "true".equalsIgnoreCase(String.valueOf(map.get("present")))) {
+                    return true;
+                }
+            }
+        }
+        if (spec.getComponents() != null && spec.getComponents().getSchemas() != null) {
+            for (String schemaName : spec.getComponents().getSchemas().keySet()) {
+                String lower = schemaName.toLowerCase(Locale.ROOT);
+                if (lower.equals("errorresponse") || lower.equals("apierror") || lower.equals("errordto") || lower.equals("apierrorresponse") || lower.equals("errorinfo")) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 }

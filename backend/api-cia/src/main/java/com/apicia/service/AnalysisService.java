@@ -35,12 +35,8 @@ public class AnalysisService {
     private final ImpactScoringService impactScoringService;
     private final ClientDependencyRepository clientDependencyRepository;
     private final DependencyScannerService dependencyScannerService;
-
-    @Value("${cia.weights.w1:0.70}")
-    private double w1;
-
-    @Value("${cia.weights.w2:0.30}")
-    private double w2;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apicia.service.security.SecurityComplianceScannerService securityComplianceScannerService;
 
     public AnalysisService(
             SpecVersionRepository specVersionRepository,
@@ -57,6 +53,10 @@ public class AnalysisService {
         this.impactScoringService = impactScoringService;
         this.clientDependencyRepository = clientDependencyRepository;
         this.dependencyScannerService = dependencyScannerService;
+    }
+
+    public void setSecurityComplianceScannerService(com.apicia.service.security.SecurityComplianceScannerService securityComplianceScannerService) {
+        this.securityComplianceScannerService = securityComplianceScannerService;
     }
 
     public AnalysisResponseDTO compare(AnalysisRequestDTO request) {
@@ -115,11 +115,14 @@ public class AnalysisService {
             }
         }
 
+        SAMResultDTO samResult = securityComplianceScannerService != null ? securityComplianceScannerService.auditOpenApi(newAPI) : null;
+
         return AnalysisResponseDTO.builder()
                 .reportId(report.getId())
                 .oldVersion(oldSpec.getVersionLabel())
                 .newVersion(newSpec.getVersionLabel())
                 .sgm(sgmResult)
+                .sam(samResult)
                 .impactScore(scoreResult)
                 .blastRadius(blastRadius)
                 .dBlast(scoreResult != null ? scoreResult.getDBlast() : null)
@@ -147,12 +150,14 @@ public class AnalysisService {
         BlastRadiusDTO blastRadius = calculateBlastRadius(sgmResult.getViolations());
         int consumerCount = blastRadius != null ? blastRadius.getTotalImpactedConsumers() : 0;
         ImpactScoreDTO scoreResult = impactScoringService.calculate(sgmResult.getDStruct(), consumerCount);
+        SAMResultDTO samResult = securityComplianceScannerService != null ? securityComplianceScannerService.auditOpenApi(newAPI) : null;
 
         return AnalysisResponseDTO.builder()
                 .reportId(null)
                 .oldVersion(oldSpec.getVersionLabel())
                 .newVersion(newSpec.getVersionLabel())
                 .sgm(sgmResult)
+                .sam(samResult)
                 .impactScore(scoreResult)
                 .blastRadius(blastRadius)
                 .dBlast(scoreResult != null ? scoreResult.getDBlast() : null)

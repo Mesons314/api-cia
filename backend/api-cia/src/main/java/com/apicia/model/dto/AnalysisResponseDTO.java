@@ -23,4 +23,5 @@ public class AnalysisResponseDTO {
     private String oldSpecTimestamp;
     private Long newSpecId;
     private String newSpecTimestamp;
+    private SAMResultDTO sam;
 }
