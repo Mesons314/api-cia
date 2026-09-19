@@ -21,4 +21,5 @@ public class SAMResultDTO {
     private List<PublicEndpointDTO> publicEndpoints;
     private List<SecurityAlertDTO> corsViolations;
     private List<SecurityAlertDTO> sensitiveDataAlerts;
+    private List<SecurityAlertDTO> performanceAlerts;
 }

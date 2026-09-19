@@ -22,6 +22,11 @@ import com.github.javaparser.ast.expr.MemberValuePair;
 import com.github.javaparser.ast.expr.NormalAnnotationExpr;
 import com.github.javaparser.ast.expr.SingleMemberAnnotationExpr;
 import com.github.javaparser.ast.expr.StringLiteralExpr;
+import com.github.javaparser.ast.expr.MethodCallExpr;
+import com.github.javaparser.ast.stmt.ForEachStmt;
+import com.github.javaparser.ast.stmt.ForStmt;
+import com.github.javaparser.ast.stmt.Statement;
+import com.github.javaparser.ast.stmt.WhileStmt;
 import io.swagger.parser.OpenAPIParser;
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.Operation;
@@ -83,6 +88,7 @@ public class SecurityComplianceScannerService {
         List<SecurityAlertDTO> allAlerts = new ArrayList<>();
         List<SecurityAlertDTO> corsViolations = new ArrayList<>();
         List<SecurityAlertDTO> sensitiveDataAlerts = new ArrayList<>();
+        List<SecurityAlertDTO> performanceAlerts = new ArrayList<>();
         List<PublicEndpointDTO> publicEndpoints = new ArrayList<>();
 
         // 1. Audit Over-Permission (Wildcard CORS)
@@ -96,7 +102,15 @@ public class SecurityComplianceScannerService {
         // 3. Audit No-Auth / Public Endpoints
         auditPublicEndpoints(endpoints, publicEndpoints, allAlerts);
 
-        return buildResult(allAlerts, corsViolations, sensitiveDataAlerts, publicEndpoints);
+        // 4. Audit DTO Circular Serialization Cycles (PERF-CYCLE-001)
+        auditCircularDtos(units, sourceRoot, performanceAlerts);
+
+        // 5. Audit N+1 Database Queries in Loops (PERF-NPLUS1-001)
+        auditNPlusOneQueries(units, sourceRoot, performanceAlerts);
+
+        allAlerts.addAll(performanceAlerts);
+
+        return buildResult(allAlerts, corsViolations, sensitiveDataAlerts, publicEndpoints, performanceAlerts);
     }
 
     /**
@@ -104,11 +118,12 @@ public class SecurityComplianceScannerService {
      */
     public SAMResultDTO auditOpenApi(OpenAPI openAPI) {
         if (openAPI == null) {
-            return buildResult(Collections.emptyList(), Collections.emptyList(), Collections.emptyList(), Collections.emptyList());
+            return buildResult(Collections.emptyList(), Collections.emptyList(), Collections.emptyList(), Collections.emptyList(), Collections.emptyList());
         }
 
         List<SecurityAlertDTO> allAlerts = new ArrayList<>();
         List<SecurityAlertDTO> sensitiveDataAlerts = new ArrayList<>();
+        List<SecurityAlertDTO> performanceAlerts = new ArrayList<>();
         List<PublicEndpointDTO> publicEndpoints = new ArrayList<>();
         Set<String> alertedKeys = new HashSet<>();
 
@@ -127,7 +142,11 @@ public class SecurityComplianceScannerService {
             }
         }
 
-        return buildResult(allAlerts, Collections.emptyList(), sensitiveDataAlerts, publicEndpoints);
+        // Audit circular schema references in OpenAPI components
+        auditOpenApiCircularSchemas(openAPI, performanceAlerts);
+        allAlerts.addAll(performanceAlerts);
+
+        return buildResult(allAlerts, Collections.emptyList(), sensitiveDataAlerts, publicEndpoints, performanceAlerts);
     }
 
     private void auditOpenApiOperation(
@@ -677,6 +696,292 @@ public class SecurityComplianceScannerService {
     }
 
     // =========================================================================
+    // 4. DTO CIRCULAR DEPENDENCY SCANNER (PERF-CYCLE-001)
+    // =========================================================================
+
+    private void auditCircularDtos(List<SourceUnit> units, Path sourceRoot, List<SecurityAlertDTO> performanceAlerts) {
+        Map<String, Set<String>> graph = new HashMap<>();
+        Map<String, String> locations = new HashMap<>();
+        Map<String, Integer> lineNumbers = new HashMap<>();
+        Set<String> knownClasses = new HashSet<>();
+
+        // 1. Collect all non-controller class names
+        for (SourceUnit unit : units) {
+            for (ClassOrInterfaceDeclaration clazz : unit.compilationUnit.findAll(ClassOrInterfaceDeclaration.class)) {
+                if (isController(clazz) || clazz.isInterface()) continue;
+                String simpleName = clazz.getNameAsString();
+                knownClasses.add(simpleName);
+                String relPath = sourceRoot != null ? sourceRoot.relativize(unit.path).toString().replace('\\', '/') : unit.path.toString();
+                locations.put(simpleName, relPath);
+                int line = clazz.getRange().map(r -> r.begin.line).orElse(1);
+                lineNumbers.put(simpleName, line);
+            }
+        }
+
+        // 2. Build dependencies between known classes
+        for (SourceUnit unit : units) {
+            for (ClassOrInterfaceDeclaration clazz : unit.compilationUnit.findAll(ClassOrInterfaceDeclaration.class)) {
+                if (isController(clazz) || clazz.isInterface()) continue;
+                String className = clazz.getNameAsString();
+
+                Set<String> referencedTypes = new HashSet<>();
+                for (FieldDeclaration field : clazz.getFields()) {
+                    // If annotated with @JsonIgnore or @JsonBackReference, Jackson won't follow it
+                    if (field.getAnnotationByName("JsonIgnore").isPresent()
+                            || field.getAnnotationByName("JsonBackReference").isPresent()) {
+                        continue;
+                    }
+                    for (VariableDeclarator var : field.getVariables()) {
+                        String clean = cleanGenericType(var.getTypeAsString());
+                        if (knownClasses.contains(clean) && !clean.equals(className)) {
+                            referencedTypes.add(clean);
+                        }
+                    }
+                }
+                graph.put(className, referencedTypes);
+            }
+        }
+
+        // 3. Detect cycles using DFS
+        Set<String> visited = new HashSet<>();
+        Set<String> inStack = new HashSet<>();
+        List<String> currentPath = new ArrayList<>();
+        Set<String> reportedCycles = new HashSet<>();
+
+        for (String node : graph.keySet()) {
+            findDtoCycles(node, graph, visited, inStack, currentPath, locations, lineNumbers, reportedCycles, performanceAlerts);
+        }
+    }
+
+    private void findDtoCycles(
+            String node,
+            Map<String, Set<String>> graph,
+            Set<String> visited,
+            Set<String> inStack,
+            List<String> currentPath,
+            Map<String, String> locations,
+            Map<String, Integer> lineNumbers,
+            Set<String> reportedCycles,
+            List<SecurityAlertDTO> alerts
+    ) {
+        if (inStack.contains(node)) {
+            int cycleStartIndex = currentPath.indexOf(node);
+            List<String> cycle = new ArrayList<>(currentPath.subList(cycleStartIndex, currentPath.size()));
+            cycle.add(node);
+
+            List<String> sortedMembers = new ArrayList<>(new HashSet<>(cycle));
+            Collections.sort(sortedMembers);
+            String cycleKey = String.join(":", sortedMembers);
+
+            if (reportedCycles.add(cycleKey)) {
+                String cycleStr = String.join(" -> ", cycle);
+                String loc = locations.getOrDefault(node, "unknown") + ":" + lineNumbers.getOrDefault(node, 1);
+
+                alerts.add(SecurityAlertDTO.builder()
+                        .checkId("PERF-CYCLE-001")
+                        .category("CIRCULAR_DEPENDENCY_RISK")
+                        .severity("CRITICAL")
+                        .endpoint("DTO: " + node)
+                        .controller(node)
+                        .method("SERIALIZATION")
+                        .location(loc)
+                        .target(node)
+                        .description("Circular serialization cycle detected: " + cycleStr + ". This will cause a StackOverflowError during Jackson JSON serialization.")
+                        .remediation("Break the circular reference using @JsonIgnore, @JsonBackReference, or dedicated response DTOs.")
+                        .build());
+            }
+            return;
+        }
+
+        if (visited.contains(node) || !graph.containsKey(node)) return;
+
+        visited.add(node);
+        inStack.add(node);
+        currentPath.add(node);
+
+        for (String neighbor : graph.getOrDefault(node, Collections.emptySet())) {
+            findDtoCycles(neighbor, graph, visited, inStack, currentPath, locations, lineNumbers, reportedCycles, alerts);
+        }
+
+        currentPath.remove(currentPath.size() - 1);
+        inStack.remove(node);
+    }
+
+    // =========================================================================
+    // 5. N+1 DATABASE QUERY SCANNER (PERF-NPLUS1-001)
+    // =========================================================================
+
+    private void auditNPlusOneQueries(List<SourceUnit> units, Path sourceRoot, List<SecurityAlertDTO> performanceAlerts) {
+        for (SourceUnit unit : units) {
+            String relPath = sourceRoot != null ? sourceRoot.relativize(unit.path).toString().replace('\\', '/') : unit.path.toString();
+
+            for (ClassOrInterfaceDeclaration clazz : unit.compilationUnit.findAll(ClassOrInterfaceDeclaration.class)) {
+                if (!isServiceOrController(clazz)) continue;
+                String className = clazz.getNameAsString();
+
+                Set<String> repoVarNames = new HashSet<>();
+                for (FieldDeclaration field : clazz.getFields()) {
+                    for (VariableDeclarator var : field.getVariables()) {
+                        String typeName = var.getTypeAsString();
+                        if (isRepositoryType(typeName)) {
+                            repoVarNames.add(var.getNameAsString());
+                        }
+                    }
+                }
+
+                for (MethodDeclaration method : clazz.getMethods()) {
+                    String methodName = method.getNameAsString();
+
+                    List<Statement> loops = new ArrayList<>();
+                    loops.addAll(method.findAll(ForEachStmt.class));
+                    loops.addAll(method.findAll(ForStmt.class));
+                    loops.addAll(method.findAll(WhileStmt.class));
+
+                    Set<String> alertedCallsInMethod = new HashSet<>();
+
+                    for (Statement loop : loops) {
+                        for (MethodCallExpr call : loop.findAll(MethodCallExpr.class)) {
+                            String scope = call.getScope().map(Expression::toString).orElse("");
+                            boolean isRepoCall = repoVarNames.contains(scope)
+                                    || scope.endsWith("Repository")
+                                    || scope.endsWith("Repo")
+                                    || scope.endsWith("Dao");
+
+                            if (isRepoCall) {
+                                String callStr = call.toString();
+                                if (alertedCallsInMethod.add(callStr)) {
+                                    int line = call.getRange().map(r -> r.begin.line).orElse(0);
+
+                                    performanceAlerts.add(SecurityAlertDTO.builder()
+                                            .checkId("PERF-NPLUS1-001")
+                                            .category("N_PLUS_ONE_QUERY")
+                                            .severity("HIGH")
+                                            .endpoint(className + "#" + methodName)
+                                            .controller(className)
+                                            .method(methodName)
+                                            .location(relPath + ":" + line)
+                                            .target(callStr)
+                                            .description("Database query '" + callStr + "' executed inside a loop. This creates an N+1 query performance bottleneck.")
+                                            .remediation("Refactor to fetch records in batch using 'findAllByIdIn()' or a JOIN query before entering the loop.")
+                                            .build());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private boolean isServiceOrController(ClassOrInterfaceDeclaration clazz) {
+        return clazz.getAnnotationByName("Service").isPresent()
+                || clazz.getAnnotationByName("RestController").isPresent()
+                || clazz.getAnnotationByName("Controller").isPresent()
+                || clazz.getNameAsString().endsWith("Service")
+                || clazz.getNameAsString().endsWith("Controller");
+    }
+
+    private boolean isRepositoryType(String typeName) {
+        return typeName.endsWith("Repository")
+                || typeName.endsWith("Repo")
+                || typeName.endsWith("Dao");
+    }
+
+    // =========================================================================
+    // 6. OPENAPI CIRCULAR SCHEMA SCANNER
+    // =========================================================================
+
+    private void auditOpenApiCircularSchemas(OpenAPI openAPI, List<SecurityAlertDTO> performanceAlerts) {
+        if (openAPI == null || openAPI.getComponents() == null || openAPI.getComponents().getSchemas() == null) return;
+
+        Map<String, Schema> allSchemas = openAPI.getComponents().getSchemas();
+        Map<String, Set<String>> schemaGraph = new HashMap<>();
+
+        for (Map.Entry<String, Schema> entry : allSchemas.entrySet()) {
+            String schemaName = entry.getKey();
+            Schema<?> s = entry.getValue();
+            Set<String> refs = new HashSet<>();
+            collectSchemaRefs(s, refs);
+            schemaGraph.put(schemaName, refs);
+        }
+
+        Set<String> visited = new HashSet<>();
+        Set<String> inStack = new HashSet<>();
+        List<String> currentPath = new ArrayList<>();
+        Set<String> reported = new HashSet<>();
+
+        for (String node : schemaGraph.keySet()) {
+            findOpenApiSchemaCycles(node, schemaGraph, visited, inStack, currentPath, reported, performanceAlerts);
+        }
+    }
+
+    private void collectSchemaRefs(Schema<?> schema, Set<String> refs) {
+        if (schema == null) return;
+        if (schema.get$ref() != null) {
+            String ref = schema.get$ref();
+            refs.add(ref.substring(ref.lastIndexOf('/') + 1));
+        }
+        if (schema.getProperties() != null) {
+            for (Schema<?> prop : schema.getProperties().values()) {
+                collectSchemaRefs(prop, refs);
+            }
+        }
+        if (schema.getItems() != null) {
+            collectSchemaRefs(schema.getItems(), refs);
+        }
+    }
+
+    private void findOpenApiSchemaCycles(
+            String node,
+            Map<String, Set<String>> graph,
+            Set<String> visited,
+            Set<String> inStack,
+            List<String> currentPath,
+            Set<String> reported,
+            List<SecurityAlertDTO> alerts
+    ) {
+        if (inStack.contains(node)) {
+            int cycleStartIndex = currentPath.indexOf(node);
+            List<String> cycle = new ArrayList<>(currentPath.subList(cycleStartIndex, currentPath.size()));
+            cycle.add(node);
+
+            List<String> sorted = new ArrayList<>(new HashSet<>(cycle));
+            Collections.sort(sorted);
+            String cycleKey = String.join(":", sorted);
+
+            if (reported.add(cycleKey)) {
+                String cycleStr = String.join(" -> ", cycle);
+                alerts.add(SecurityAlertDTO.builder()
+                        .checkId("PERF-CYCLE-001")
+                        .category("CIRCULAR_DEPENDENCY_RISK")
+                        .severity("CRITICAL")
+                        .endpoint("Schema: " + node)
+                        .controller(node)
+                        .method("SCHEMA_CYCLE")
+                        .location("components/schemas/" + node)
+                        .target(node)
+                        .description("Circular schema reference detected: " + cycleStr + ". This will cause infinite recursion / StackOverflowError during serialization.")
+                        .remediation("Break the recursive reference or use a non-recursive flat schema.")
+                        .build());
+            }
+            return;
+        }
+
+        if (visited.contains(node) || !graph.containsKey(node)) return;
+
+        visited.add(node);
+        inStack.add(node);
+        currentPath.add(node);
+
+        for (String neighbor : graph.getOrDefault(node, Collections.emptySet())) {
+            findOpenApiSchemaCycles(neighbor, graph, visited, inStack, currentPath, reported, alerts);
+        }
+
+        currentPath.remove(currentPath.size() - 1);
+        inStack.remove(node);
+    }
+
+    // =========================================================================
     // HELPER & RESULT BUILDER METHODS
     // =========================================================================
 
@@ -684,7 +989,8 @@ public class SecurityComplianceScannerService {
             List<SecurityAlertDTO> allAlerts,
             List<SecurityAlertDTO> corsViolations,
             List<SecurityAlertDTO> sensitiveDataAlerts,
-            List<PublicEndpointDTO> publicEndpoints
+            List<PublicEndpointDTO> publicEndpoints,
+            List<SecurityAlertDTO> performanceAlerts
     ) {
         int criticalCount = 0;
         int highCount = 0;
@@ -717,6 +1023,7 @@ public class SecurityComplianceScannerService {
                 .corsViolations(corsViolations)
                 .sensitiveDataAlerts(sensitiveDataAlerts)
                 .publicEndpoints(publicEndpoints)
+                .performanceAlerts(performanceAlerts != null ? performanceAlerts : Collections.emptyList())
                 .build();
     }
 

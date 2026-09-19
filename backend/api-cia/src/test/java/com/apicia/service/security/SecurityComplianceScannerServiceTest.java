@@ -246,4 +246,106 @@ public class SecurityComplianceScannerServiceTest {
         assertEquals(1, result.getPublicEndpoints().size());
         assertEquals("/api/payments", result.getPublicEndpoints().get(0).getPath());
     }
+
+    @Test
+    public void testDetectCircularDtoSerializationCycle(@TempDir Path tempDir) {
+        String parentDto = """
+            package com.example.dto;
+            import java.util.List;
+            public class ClinicDTO {
+                private Long id;
+                private List<DoctorDTO> doctors;
+            }
+        """;
+
+        String childDto = """
+            package com.example.dto;
+            public class DoctorDTO {
+                private Long id;
+                private ClinicDTO clinic; // Circular cycle ClinicDTO <-> DoctorDTO
+            }
+        """;
+
+        CompilationUnit cu1 = StaticJavaParser.parse(parentDto);
+        CompilationUnit cu2 = StaticJavaParser.parse(childDto);
+        SourceUnit u1 = new SourceUnit(tempDir.resolve("ClinicDTO.java"), cu1);
+        SourceUnit u2 = new SourceUnit(tempDir.resolve("DoctorDTO.java"), cu2);
+
+        when(extractionService.extractEndpoints(any())).thenReturn(List.of());
+        when(extractionService.parseSourceUnits(any())).thenReturn(List.of(u1, u2));
+        when(extractionService.getSourceRoot(any())).thenReturn(tempDir);
+
+        SAMResultDTO result = securityScanner.auditSourceCode(null);
+
+        assertNotNull(result);
+        boolean hasCycleAlert = result.getAlerts().stream()
+                .anyMatch(a -> "PERF-CYCLE-001".equals(a.getCheckId()));
+        assertTrue(hasCycleAlert, "Should detect circular DTO serialization cycle between ClinicDTO and DoctorDTO");
+    }
+
+    @Test
+    public void testDetectNPlusOneDatabaseQueriesInLoop(@TempDir Path tempDir) {
+        String serviceCode = """
+            package com.example.service;
+            import org.springframework.stereotype.Service;
+            import java.util.List;
+
+            @Service
+            public class AppointmentService {
+                private UserRepository userRepository;
+
+                public void notifyUsers(List<Long> userIds) {
+                    for (Long id : userIds) {
+                        userRepository.findById(id); // N+1 Query in loop!
+                    }
+                }
+            }
+        """;
+
+        CompilationUnit cu = StaticJavaParser.parse(serviceCode);
+        SourceUnit unit = new SourceUnit(tempDir.resolve("AppointmentService.java"), cu);
+
+        when(extractionService.extractEndpoints(any())).thenReturn(List.of());
+        when(extractionService.parseSourceUnits(any())).thenReturn(List.of(unit));
+        when(extractionService.getSourceRoot(any())).thenReturn(tempDir);
+
+        SAMResultDTO result = securityScanner.auditSourceCode(null);
+
+        assertNotNull(result);
+        boolean hasNPlusOneAlert = result.getAlerts().stream()
+                .anyMatch(a -> "PERF-NPLUS1-001".equals(a.getCheckId()));
+        assertTrue(hasNPlusOneAlert, "Should detect N+1 repository call inside loop");
+    }
+
+    @Test
+    public void testDetectOpenApiCircularSchema() {
+        String openApiJson = """
+        {
+          "openapi": "3.0.0",
+          "info": { "title": "Cycle API", "version": "1.0.0" },
+          "paths": {},
+          "components": {
+            "schemas": {
+              "Category": {
+                "type": "object",
+                "properties": {
+                  "subCategories": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/Category" }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """;
+
+        OpenAPI openAPI = new OpenAPIParser().readContents(openApiJson, null, null).getOpenAPI();
+        SAMResultDTO result = securityScanner.auditOpenApi(openAPI);
+
+        assertNotNull(result);
+        boolean hasCycleAlert = result.getAlerts().stream()
+                .anyMatch(a -> "PERF-CYCLE-001".equals(a.getCheckId()));
+        assertTrue(hasCycleAlert, "Should detect circular schema reference in Category");
+    }
 }
