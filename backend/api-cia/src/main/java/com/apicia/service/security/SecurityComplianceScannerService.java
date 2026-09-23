@@ -350,7 +350,7 @@ public class SecurityComplianceScannerService {
                     continue;
                 }
                 String controllerClass = qualifiedName(unit.compilationUnit, clazz);
-                String relativeSource = sourceRoot != null ? sourceRoot.relativize(unit.path).toString().replace('\\', '/') : unit.path.toString();
+                String relativeSource = resolveRelativePath(sourceRoot, unit.path);
 
                 // 1. Check Class-level @CrossOrigin
                 Optional<AnnotationExpr> classCors = clazz.getAnnotationByName("CrossOrigin");
@@ -465,7 +465,7 @@ public class SecurityComplianceScannerService {
         Map<String, DtoClassInfo> dtoMap = new HashMap<>();
 
         for (SourceUnit unit : units) {
-            String relativeSource = sourceRoot != null ? sourceRoot.relativize(unit.path).toString().replace('\\', '/') : unit.path.toString();
+            String relativeSource = resolveRelativePath(sourceRoot, unit.path);
             for (ClassOrInterfaceDeclaration clazz : unit.compilationUnit.findAll(ClassOrInterfaceDeclaration.class)) {
                 if (isController(clazz)) continue;
 
@@ -489,7 +489,7 @@ public class SecurityComplianceScannerService {
 
         // 1. Scan controller methods for URL-based sensitive parameters (e.g. GET ?password=...)
         for (SourceUnit unit : units) {
-            String relativeSource = sourceRoot != null ? sourceRoot.relativize(unit.path).toString().replace('\\', '/') : unit.path.toString();
+            String relativeSource = resolveRelativePath(sourceRoot, unit.path);
             for (ClassOrInterfaceDeclaration clazz : unit.compilationUnit.findAll(ClassOrInterfaceDeclaration.class)) {
                 if (!isController(clazz)) continue;
                 String controllerClass = qualifiedName(unit.compilationUnit, clazz);
@@ -527,16 +527,29 @@ public class SecurityComplianceScannerService {
 
         // 2. Scan DTOs returned or accepted by endpoints
         Set<String> alertedFieldKeys = new HashSet<>();
-        for (ExtractedEndpoint ep : endpoints) {
-            String returnType = ep.getReturnType();
-            if (returnType != null) {
-                String cleanType = cleanGenericType(returnType);
-                inspectDtoForSensitiveFields(cleanType, dtoMap, ep, alertedFieldKeys, sensitiveDataAlerts);
+        if (endpoints != null) {
+            for (ExtractedEndpoint ep : endpoints) {
+                if (ep == null) continue;
+                String returnType = ep.getReturnType();
+                if (returnType != null) {
+                    String cleanType = cleanGenericType(returnType);
+                    inspectDtoForSensitiveFields(cleanType, dtoMap, ep, alertedFieldKeys, sensitiveDataAlerts, new HashSet<>());
+                }
             }
         }
     }
 
-    private void inspectDtoForSensitiveFields(String typeName, Map<String, DtoClassInfo> dtoMap, ExtractedEndpoint ep, Set<String> alertedKeys, List<SecurityAlertDTO> alerts) {
+    private void inspectDtoForSensitiveFields(
+            String typeName,
+            Map<String, DtoClassInfo> dtoMap,
+            ExtractedEndpoint ep,
+            Set<String> alertedKeys,
+            List<SecurityAlertDTO> alerts,
+            Set<String> visitedTypes
+    ) {
+        if (typeName == null || !visitedTypes.add(typeName)) {
+            return;
+        }
         DtoClassInfo info = dtoMap.get(typeName);
         if (info == null) return;
 
@@ -548,13 +561,18 @@ public class SecurityComplianceScannerService {
                 String key = info.qualifiedName + "#" + field.name;
                 if (alertedKeys.add(key)) {
                     String severity = isHighRiskKeyword(field.name) ? "CRITICAL" : "HIGH";
+                    String httpVerb = (ep != null && ep.getHttpMethod() != null) ? ep.getHttpMethod().toUpperCase() : "GET";
+                    String endpointPath = (ep != null && ep.getPath() != null) ? ep.getPath() : "/";
+                    String controllerClass = (ep != null && ep.getControllerClass() != null) ? ep.getControllerClass() : info.simpleName;
+                    String controllerMethod = (ep != null && ep.getControllerMethod() != null) ? ep.getControllerMethod() : "unknownMethod";
+
                     SecurityAlertDTO alert = SecurityAlertDTO.builder()
                             .checkId("SEC-LEAK-001")
                             .category("SENSITIVE_DATA_EXPOSURE")
                             .severity(severity)
-                            .endpoint(ep.getHttpMethod().toUpperCase() + " " + ep.getPath())
-                            .controller(ep.getControllerClass())
-                            .method(ep.getControllerMethod())
+                            .endpoint(httpVerb + " " + endpointPath)
+                            .controller(controllerClass)
+                            .method(controllerMethod)
                             .location(info.sourceFile + ":" + field.lineNumber)
                             .target(field.name + ": " + field.type)
                             .description("Sensitive field '" + field.name + "' in DTO '" + info.simpleName + "' is exposed in endpoint response payload without @JsonIgnore.")
@@ -566,7 +584,7 @@ public class SecurityComplianceScannerService {
                 // Recursively check nested complex types
                 String nestedType = cleanGenericType(field.type);
                 if (!nestedType.equals(typeName) && dtoMap.containsKey(nestedType)) {
-                    inspectDtoForSensitiveFields(nestedType, dtoMap, ep, alertedKeys, alerts);
+                    inspectDtoForSensitiveFields(nestedType, dtoMap, ep, alertedKeys, alerts, visitedTypes);
                 }
             }
         }
@@ -604,15 +622,19 @@ public class SecurityComplianceScannerService {
     // =========================================================================
 
     private void auditPublicEndpoints(List<ExtractedEndpoint> endpoints, List<PublicEndpointDTO> publicEndpoints, List<SecurityAlertDTO> allAlerts) {
+        if (endpoints == null) return;
         for (ExtractedEndpoint ep : endpoints) {
+            if (ep == null) continue;
             boolean isPublic = "false".equals(ep.getAuthenticationRequired())
                     || (ep.getAuthorization() != null && ep.getAuthorization().toLowerCase().contains("permitall"));
 
             if (isPublic) {
+                String verb = (ep.getHttpMethod() != null) ? ep.getHttpMethod().toUpperCase() : "GET";
+                String path = (ep.getPath() != null) ? ep.getPath() : "/";
                 String reason = ep.getAuthorization() != null ? ep.getAuthorization() : "Configured with public access / permitAll";
                 PublicEndpointDTO pubDto = PublicEndpointDTO.builder()
-                        .path(ep.getPath())
-                        .httpMethod(ep.getHttpMethod().toUpperCase())
+                        .path(path)
+                        .httpMethod(verb)
                         .controllerClass(ep.getControllerClass())
                         .controllerMethod(ep.getControllerMethod())
                         .sourceFile(ep.getSourceFile())
@@ -622,18 +644,17 @@ public class SecurityComplianceScannerService {
                 publicEndpoints.add(pubDto);
 
                 // If a state-modifying endpoint (DELETE, POST, PUT, PATCH) is unauthenticated, flag it for audit
-                String verb = ep.getHttpMethod().toUpperCase();
-                if ("DELETE".equals(verb) || "PUT".equals(verb) || "PATCH".equals(verb)) {
+                if ("DELETE".equals(verb) || "POST".equals(verb) || "PUT".equals(verb) || "PATCH".equals(verb)) {
                     SecurityAlertDTO alert = SecurityAlertDTO.builder()
                             .checkId("SEC-NOAUTH-001")
                             .category("UNAUTHENTICATED_STATE_MODIFICATION")
                             .severity("HIGH")
-                            .endpoint(verb + " " + ep.getPath())
+                            .endpoint(verb + " " + path)
                             .controller(ep.getControllerClass())
                             .method(ep.getControllerMethod())
-                            .location(ep.getSourceFile() + ":" + ep.getLineNumber())
-                            .target(verb + " " + ep.getPath())
-                            .description("State-modifying endpoint '" + verb + " " + ep.getPath() + "' is configured with public access without authentication.")
+                            .location(ep.getSourceFile() != null ? ep.getSourceFile() + ":" + ep.getLineNumber() : "unknown:1")
+                            .target(verb + " " + path)
+                            .description("State-modifying endpoint '" + verb + " " + path + "' is configured with public access without authentication.")
                             .remediation("Verify whether this endpoint should require authentication (e.g., via SecurityFilterChain or @PreAuthorize).")
                             .build();
                     allAlerts.add(alert);
@@ -711,7 +732,7 @@ public class SecurityComplianceScannerService {
                 if (isController(clazz) || clazz.isInterface()) continue;
                 String simpleName = clazz.getNameAsString();
                 knownClasses.add(simpleName);
-                String relPath = sourceRoot != null ? sourceRoot.relativize(unit.path).toString().replace('\\', '/') : unit.path.toString();
+                String relPath = resolveRelativePath(sourceRoot, unit.path);
                 locations.put(simpleName, relPath);
                 int line = clazz.getRange().map(r -> r.begin.line).orElse(1);
                 lineNumbers.put(simpleName, line);
@@ -813,7 +834,7 @@ public class SecurityComplianceScannerService {
 
     private void auditNPlusOneQueries(List<SourceUnit> units, Path sourceRoot, List<SecurityAlertDTO> performanceAlerts) {
         for (SourceUnit unit : units) {
-            String relPath = sourceRoot != null ? sourceRoot.relativize(unit.path).toString().replace('\\', '/') : unit.path.toString();
+            String relPath = resolveRelativePath(sourceRoot, unit.path);
 
             for (ClassOrInterfaceDeclaration clazz : unit.compilationUnit.findAll(ClassOrInterfaceDeclaration.class)) {
                 if (!isServiceOrController(clazz)) continue;
@@ -1036,6 +1057,16 @@ public class SecurityComplianceScannerService {
     private String qualifiedName(CompilationUnit cu, ClassOrInterfaceDeclaration type) {
         String packageName = cu.getPackageDeclaration().map(pd -> pd.getNameAsString() + ".").orElse("");
         return packageName + type.getNameAsString();
+    }
+
+    private String resolveRelativePath(Path sourceRoot, Path filePath) {
+        if (filePath == null) return "unknown";
+        if (sourceRoot == null) return filePath.toString().replace('\\', '/');
+        try {
+            return sourceRoot.relativize(filePath).toString().replace('\\', '/');
+        } catch (Exception e) {
+            return filePath.toString().replace('\\', '/');
+        }
     }
 
     private String resolveMethodHttpVerb(MethodDeclaration method) {
