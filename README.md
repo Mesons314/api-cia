@@ -1,331 +1,138 @@
-# API-CIA Repository Analysis
+# API-CIA (API Change Impact Analyzer)
 
-## Repository
-`c:\Users\Disha Dungrani\api-cia`
-
----
-
-# 1. Directory / Project Structure
-
-```
-api-cia/
-├── backend/
-│   └── api-cia/                          ← Actual Maven/Spring Boot module
-│       ├── .mvn/
-│       ├── mvnw
-│       ├── mvnw.cmd
-│       ├── pom.xml
-│       ├── samples/
-│       │   ├── openapi_v1.json
-│       │   └── openapi_v2.json
-│       ├── automatic_integration_design.md
-│       ├── code_changes_guide.md
-│       ├── dependency_analyzer_design.md
-│       ├── direct_code_parser_guide.md
-│       ├── universal_integration_guide.md
-│       └── src/
-│           └── main/
-│               ├── java/com/apicia/
-│               │   ├── ApiciaApplication.java
-│               │   ├── config/
-│               │   ├── controller/
-│               │   ├── exception/
-│               │   ├── model/
-│               │   ├── repository/
-│               │   └── service/
-│               └── resources/
-└── frontend/
-    └── hhhg.txt
-```
-
-### Notes
-
-- Backend is the actual Spring Boot application.
-- Frontend folder is only a placeholder.
-- No `src/test` directory exists.
+> **Detect API contract changes, analyze security and governance violations, identify downstream consumers, and estimate change impact before deployment.**
 
 ---
 
-# 2. What the Project Does
+## 1. System Architecture & Core Pipeline
 
-The project is an **API Change Impact Analyzer** built using **Spring Boot**.
-
-It provides the following functionality:
-
-- Static API extraction using JavaParser
-- Generates OpenAPI specifications
-- Compares old and new API versions
-- Detects breaking API changes
-- Calculates API impact score
-- Performs security extraction and analysis
-- Automatically creates snapshots during startup
-
-The project also contains several design documents describing future enhancements such as:
-
-- Dependency Analyzer
-- Blast Radius analysis
-- CLI integration
-- Git Hook automation
-
-These are design documents only and are not fully implemented.
-
----
-
-# 3. How the Application Works
-
-## Entry Point
+API-CIA is a developer and security analysis platform that automates API evolution risk assessment through a 5-stage pipeline:
 
 ```
-ApiciaApplication.java
-```
-
-The application starts as a normal Spring Boot application.
-
----
-
-## Startup Workflow
-
-On startup the application:
-
-1. Extracts endpoints
-2. Generates OpenAPI specification
-3. Creates snapshot
-4. Optionally compares with previous snapshot
-
----
-
-## REST Controllers
-
-### AnalysisController
-
-Base Path
-
-```
-/api/analysis
-```
-
-Endpoints
-
-```
-POST /api/analysis/compare
-GET  /api/analysis/reports
-GET  /api/analysis/reports/{id}
+[ OpenAPI Specs / Source Code AST ]
+                 │
+                 ▼
+┌────────────────────────────────────────────────────────┐
+│ 1. Static Governance Module (SGM)                      │
+│    • SGM-001 to SGM-014 rule evaluations               │
+│    • Breaking parameter, response & route mutations    │
+│    • Structural Damage Score: D_struct                 │
+└────────────────────────┬───────────────────────────────┘
+                         │
+                         ▼
+┌────────────────────────────────────────────────────────┐
+│ 2. Security Analysis Module (SAM)                      │
+│    • Wildcard CORS detection (SAM-001)                 │
+│    • Sensitive data leak scanning (SAM-002 / SAM-003)  │
+│    • Unauthenticated public endpoints (SAM-004)        │
+│    • Circular references & N+1 queries (SAM-005/007)   │
+└────────────────────────┬───────────────────────────────┘
+                         │
+                         ▼
+┌────────────────────────────────────────────────────────┐
+│ 3. Downstream Dependency Scanner                       │
+│    • JavaParser AST inspection of consumer services    │
+│    • Spring Cloud FeignClient mappings                 │
+│    • RestTemplate & WebClient URI call sites           │
+└────────────────────────┬───────────────────────────────┘
+                         │
+                         ▼
+┌────────────────────────────────────────────────────────┐
+│ 4. Blast Radius & Composite Risk Engine                │
+│    • Consumer service breakage propagation             │
+│    • Blast Radius Factor: D_blast                      │
+│    • S_total = min(1, 0.70 × D_struct + 0.30 × D_blast)│
+│    • Risk Level: LOW / MEDIUM / HIGH / CRITICAL        │
+└────────────────────────┬───────────────────────────────┘
+                         │
+                         ▼
+┌────────────────────────────────────────────────────────┐
+│ 5. Developer Tooling & Integrations                    │
+│    • Multi-language SDK generation (TypeScript, Java)  │
+│    • Postman Collection v2.1 export                    │
+│    • Git Pre-Push Hook integration                     │
+└────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-### ExtractionController
+## 2. Prerequisites
 
-Base Path
-
-```
-/api/extraction
-```
-
-Endpoints
-
-```
-GET  /api/extraction/endpoints
-GET  /api/extraction/openapi.json
-POST /api/extraction/snapshot
-```
+- **Java**: JDK 17 or 21
+- **Node.js**: v18+ (v24 LTS recommended)
+- **Database**: PostgreSQL (port 5432, database: `api_analyzer`) or MySQL
+- **Build Tools**: Maven (`mvnw.cmd` included), `npm`
 
 ---
 
-### SpecController
+## 3. Starting the Backend
 
-Base Path
+1. **Configure Database & Properties**:
+   Ensure PostgreSQL is running and update `backend/api-cia/src/main/resources/application.properties` if needed:
+   ```properties
+   server.port=8080
+   spring.datasource.url=jdbc:postgresql://localhost:5432/api_analyzer
+   spring.datasource.username=postgres
+   spring.datasource.password=your_password
+   ```
 
-```
-/api/specs
-```
-
-Endpoints
-
-```
-POST /api/specs/upload
-GET  /api/specs
-GET  /api/specs/{id}
-```
-
----
-
-## Core Services
-
-### StaticEndpointExtractionService
-
-Responsible for
-
-- Parsing Java source files
-- Detecting controllers
-- Reading mapping annotations
-- Generating OpenAPI specification
+2. **Run Spring Boot Application**:
+   ```bash
+   cd backend/api-cia
+   ./mvnw.cmd spring-boot:run
+   ```
+   The backend starts at `http://localhost:8080`.
 
 ---
 
-### SecurityExtractionService
+## 4. Starting the Frontend
 
-Responsible for
+1. **Navigate to the frontend directory**:
+   ```bash
+   cd frontend
+   ```
 
-- Parsing Spring Security configuration
-- Detecting JWT
-- Detecting OAuth2
-- Detecting Basic Authentication
-- Detecting authorization annotations
+2. **Configure Environment** (defaults to `http://localhost:8080`):
+   ```bash
+   # .env
+   VITE_API_BASE_URL=http://localhost:8080
+   ```
 
----
-
-### SGMService
-
-Runs rule-based API comparison.
-
-Implemented Rules
-
-- SGM-001 Versioning Rule
-- SGM-002 Naming Convention Rule
-- SGM-003 Removed Endpoint Rule
-- SGM-004 Parameter Type Change Rule
-- SGM-005 Required Field Rule
-- SGM-006 HTTP Method Change Rule
+3. **Install Dependencies & Launch Dev Server**:
+   ```bash
+   npm install
+   npm run dev
+   ```
+   The UI will open at `http://localhost:3000`.
 
 ---
 
-### ImpactScoringService
+## 5. 3–5 Minute Evaluator Demo Flow
 
-Calculates
+1. **Open Dashboard (`/`)**:
+   - Observe live backend connection indicator in the sidebar (`● Connected`).
+   - Review aggregate summary cards: API Specs, Reports, Affected Consumers, and High/Critical Risk count.
 
-- Structural score
-- Total impact score
-- Risk level
+2. **Execute Analysis (`/analyze`)**:
+   - Click **"Launch Demo Analysis"** (1-click Evaluator Preset) or select/upload `openapi_v1.json` vs `openapi_v2.json`.
+   - Watch the 5-step pipeline execution tracker.
 
-Risk Levels
+3. **Review "What Changed?" (SGM Governance)**:
+   - Inspect detected breaking changes (e.g. parameter `id` type changed `integer` $\rightarrow$ `string`, new required field `age` added, removed security requirements).
+   - Click on any finding to open the **Slide-Over Detail Inspector** showing the exact contract diff and code location.
 
-- LOW
-- MEDIUM
-- HIGH
-- CRITICAL
+4. **Review Blast Radius & Consumers (`/blast-radius`)**:
+   - Inspect the interactive downstream microservice tree diagram:
+     `Provider API` $\rightarrow$ `GET /v1/users` $\rightarrow$ `Order Service (Feign)` / `Payment Service (RestTemplate)`.
+   - View exact file names and line numbers of breaking client call sites.
 
----
+5. **Examine Composite Risk Scoring**:
+   - Review the mathematical formula breakdown:
+     $$S_{total} = \min(1, 0.70 \times D_{struct} + 0.30 \times D_{blast})$$
+   - View the calculated risk level badge (`HIGH` / `CRITICAL`).
 
-# 4. Bugs / Code Smells / Findings
+6. **Inspect Security & Compliance Findings (`/security`)**:
+   - Review SAM findings: Wildcard CORS, sensitive data exposures (`passwordHash` in response DTO), and unauthenticated endpoints.
 
-## Security
-
-- Database password was committed in git history.
-- Password was removed later but still exists in commit history.
-
----
-
-## Logging
-
-- `GlobalExceptionHandler` uses `System.err.println`.
-- Stack traces are discarded.
-
----
-
-## Exception Handling
-
-- `SGMService` silently ignores exceptions.
-
----
-
-## Security Extraction
-
-- `SecurityExtractionService` incorrectly identifies every `@Bean` as a SecurityFilterChain.
-
----
-
-## Dead Code
-
-Unused DTOs
-
-- SAMResultDTO
-- SecurityAlertDTO
-- SPMResultDTO
-
----
-
-## Repository Issues
-
-Unused repository methods include
-
-- findAllByOrderByCreatedAtDesc()
-- findByOldSpecIdOrNewSpecId()
-- findByReportIdAndSeverity()
-
----
-
-## Configuration Issues
-
-- ObjectMapper overrides Spring Boot default configuration.
-- Source root depends on current working directory.
-- Versioning rule reports violations on project's own endpoints.
-- OAuth URL is hardcoded as example.com.
-- Development database configuration is committed.
-
----
-
-# 5. Tests
-
-Current Status
-
-- No test cases
-- No src/test directory
-- spring-boot-starter-test dependency exists but is unused
-
----
-
-# Logging
-
-Only the startup runner uses SLF4J.
-
-Most classes do not perform logging.
-
----
-
-# Exception Handling
-
-Uses a centralized
-
-```
-@RestControllerAdvice
-```
-
-However,
-
-- IllegalStateException falls back to generic error handling.
-- Silent exception swallowing exists inside SGMService.
-
----
-
-# Future Features
-
-The repository contains documentation for future enhancements:
-
-- Dependency Analyzer
-- Blast Radius Analysis
-- CLI Tool
-- Automatic Git Integration
-
-These features are currently not implemented.
-
----
-
-# Overall Assessment
-
-The project successfully implements:
-
-- Static API Extraction
-- OpenAPI Generation
-- API Version Comparison
-- Breaking Change Detection
-- Impact Scoring
-- Security Extraction
-
-Primary improvements suggested:
-
-- Add automated tests
-- Improve logging
-- Remove dead code
-- Externalize configuration
-- Complete planned future features
+7. **Generate Client SDK & Postman Collection (`/sdk-generator` & `/postman-generator`)**:
+   - Select the target contract and download a compiled TypeScript Axios SDK ZIP or Postman v2.1 test collection in 1 click.

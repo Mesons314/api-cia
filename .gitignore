@@ -1,0 +1,23 @@
+# OS Files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDEs and Editors
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+frontend/npm-debug.log*
+
+# Backend
+backend/api-cia/target/
+backend/api-cia/.mvn/wrapper/maven-wrapper.jar
